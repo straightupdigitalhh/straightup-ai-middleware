@@ -1,4 +1,4 @@
-name: Build & Push Docker Image
+name: Build, Push & Deploy
 
 on:
   push:
@@ -7,6 +7,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  MITTWALD_STACK_ID: a3537ec6-aec4-4e17-874b-e3e273d53b8a
+  MITTWALD_SERVICE_ID: e8ef3c97-c066-4920-994c-54c14c78daea
 
 jobs:
   build-and-push:
@@ -34,3 +36,12 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Deploy to Mittwald (pull & recreate)
+        run: |
+          curl -sf -X POST \
+            "https://api.mittwald.de/v2/stacks/${{ env.MITTWALD_STACK_ID }}/services/${{ env.MITTWALD_SERVICE_ID }}/actions/recreate" \
+            -H "Authorization: Bearer ${{ secrets.MITTWALD_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"pullPolicy": "Always"}'
+          echo "Mittwald container recreated with latest image"
