@@ -1,0 +1,12 @@
+services:
+  awork-middleware:
+    build: .
+    ports:
+      - "3500:3500"
+    environment:
+      - AWORK_API_TOKEN=${AWORK_API_TOKEN}
+      - AWORK_BASE_URL=${AWORK_BASE_URL:-https://api.awork.com/api/v1}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - API_KEY=${API_KEY}
+      - PORT=3500
+    restart: unless-stopped
