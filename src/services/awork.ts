@@ -139,6 +139,7 @@ export class AworkClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name,
+        baseType: 'projecttask',
         projectId,
         taskListId,
         ...(description && { description }),
