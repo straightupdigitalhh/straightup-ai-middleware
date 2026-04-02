@@ -137,4 +137,35 @@ export class AworkResolver {
     this.projectCache.clear();
     this.docCache.clear();
   }
+
+  /**
+   * Extrahiert eine Liste eindeutiger Kundennamen aus awork-Projekten und -Companies.
+   * Wird für die automatische Kunden-Erkennung durch Claude verwendet.
+   */
+  async extractUniqueCustomerNames(): Promise<string[]> {
+    const projects = await this.getCachedProjects();
+    const companies = await this.awork.getCompanies();
+
+    const customerNames = new Set<string>();
+
+    // Kundennamen aus Companies
+    for (const company of companies) {
+      if (company.name) customerNames.add(company.name);
+    }
+
+    // Kundennamen aus Projektpräfixen extrahieren
+    // Typische Formate: "🏢 Dentaversum – Allgemein", "Dentaversum – Web-Support"
+    for (const project of projects) {
+      const name = project.name
+        .replace(/^🏢\s*/, '')    // Emoji-Präfix entfernen
+        .trim();
+      const sep = name.match(/\s*[–\-]\s*/);
+      if (sep && sep.index) {
+        const prefix = name.substring(0, sep.index).trim();
+        if (prefix.length > 1) customerNames.add(prefix);
+      }
+    }
+
+    return Array.from(customerNames).sort();
+  }
 }

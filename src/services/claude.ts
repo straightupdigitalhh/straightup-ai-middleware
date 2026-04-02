@@ -64,6 +64,57 @@ WICHTIG:
 - Wenn kein Projekt erkennbar ist, setze projectName auf null
 - Bei Deadlines im Text relative Angaben (z.B. "nächste Woche") in absolute Daten umrechnen basierend auf dem heutigen Datum`;
 
+// ─── Customer Auto-Detection ────────────────────────────────────
+
+export interface CustomerDetection {
+  customerName: string;
+  projectName?: string;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+export async function detectCustomer(
+  emailContent: string,
+  fromAddress: string,
+  subject: string,
+  knownCustomers: string[]
+): Promise<CustomerDetection> {
+  const anthropic = new Anthropic();
+
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 256,
+    system: `Du ordnest E-Mails einem bekannten Kunden zu. Antworte AUSSCHLIESSLICH als JSON.`,
+    messages: [{
+      role: 'user',
+      content: `Bekannte Kunden: ${knownCustomers.join(', ')}
+
+E-Mail:
+  Von: ${fromAddress}
+  Betreff: ${subject}
+  Inhalt (Auszug): ${emailContent.substring(0, 500)}
+
+Welchem Kunden gehört diese E-Mail? Antworte als JSON:
+{"customerName": "...", "projectName": "..." oder null, "confidence": "high"|"medium"|"low"}
+
+Regeln:
+- Wenn der Absender-Domain oder Name klar zu einem Kunden passt → "high"
+- Wenn der Inhalt auf einen Kunden hindeutet → "medium"
+- Wenn unklar → customerName: "Unbekannt", confidence: "low"`
+    }],
+  });
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '{}';
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+
+  try {
+    return JSON.parse(jsonMatch ? jsonMatch[0] : text) as CustomerDetection;
+  } catch {
+    return { customerName: 'Unbekannt', confidence: 'low' };
+  }
+}
+
+// ─── Content Routing ────────────────────────────────────────────
+
 export async function routeContent(
   content: string,
   contentType: ContentType,

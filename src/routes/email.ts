@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { routeContent } from '../services/claude.js';
+import { routeContent, detectCustomer } from '../services/claude.js';
 import { AworkClient } from '../services/awork.js';
 import { AworkResolver } from '../services/resolver.js';
 import { renderEmailLogEntry, renderDecisionLogEntry } from '../templates/index.js';
@@ -23,12 +23,12 @@ const router = Router();
  */
 router.post('/api/email', async (req: Request, res: Response) => {
   try {
-    const { subject, body, from, receivedAt, customerName, projectName } = req.body;
+    const { subject, body, from, receivedAt, customerName: providedCustomerName, projectName } = req.body;
 
     // Validierung
-    if (!body || !customerName) {
+    if (!body) {
       res.status(400).json({
-        error: 'Pflichtfelder fehlen: body, customerName',
+        error: 'Pflichtfeld fehlt: body',
       });
       return;
     }
@@ -37,16 +37,29 @@ router.post('/api/email', async (req: Request, res: Response) => {
       ? `Betreff: ${subject}\nVon: ${from || 'unbekannt'}\nDatum: ${receivedAt || 'unbekannt'}\n\n${body}`
       : body;
 
-    console.log(`📧 E-Mail verarbeiten: "${subject}" von ${from} für ${customerName}`);
+    // Kunden-Autoerkennung wenn customerName nicht angegeben
+    const awork = new AworkClient(process.env.AWORK_API_TOKEN!);
+    const resolver = new AworkResolver(awork);
+    let customerName = providedCustomerName;
+
+    if (!customerName) {
+      console.log(`📧 E-Mail verarbeiten: "${subject}" von ${from} — Kunde wird auto-erkannt...`);
+      const knownCustomers = await resolver.extractUniqueCustomerNames();
+      const detection = await detectCustomer(emailContent, from || '', subject || '', knownCustomers);
+      customerName = detection.customerName;
+      console.log(`   → Kunde auto-erkannt: "${customerName}" (${detection.confidence})`);
+      if (detection.confidence === 'low') {
+        console.warn(`   ⚠ Niedrige Konfidenz — Zuordnung ggf. prüfen`);
+      }
+    } else {
+      console.log(`📧 E-Mail verarbeiten: "${subject}" von ${from} für ${customerName}`);
+    }
 
     // 1. Claude analysiert die E-Mail
     const routing = await routeContent(emailContent, 'email', customerName, projectName);
     console.log(`   → Kategorie: ${routing.emailCategory}, Titel: "${routing.title}"`);
 
     // 2. awork-IDs auflösen
-    const awork = new AworkClient(process.env.AWORK_API_TOKEN!);
-    const resolver = new AworkResolver(awork);
-
     const project = await resolver.resolveProject(customerName, projectName);
     console.log(`   → Projekt: ${project.projectName} (${project.projectId})`);
 
