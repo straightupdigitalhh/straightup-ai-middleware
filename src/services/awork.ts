@@ -140,8 +140,8 @@ export class AworkClient {
       body: JSON.stringify({
         name,
         baseType: 'projecttask',
-        projectId,
-        taskListId,
+        entityId: projectId,
+        lists: [{ id: taskListId }],
         ...(description && { description }),
         ...(dueOn && { dueOn }),
       }),
