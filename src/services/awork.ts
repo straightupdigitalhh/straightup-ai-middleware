@@ -109,12 +109,12 @@ export class AworkClient {
 
   async updateDocument(documentId: string, htmlContent: string): Promise<AworkDocument> {
     const form = new FormData();
-    form.append('Content', Buffer.from(htmlContent, 'utf-8'), {
+    form.append('content', Buffer.from(htmlContent, 'utf-8'), {
       filename: 'content.html',
       contentType: 'text/html; charset=utf-8',
     });
 
-    return this.request(`/documents/${documentId}`, {
+    return this.request(`/documents/${documentId}/content`, {
       method: 'PUT',
       headers: form.getHeaders(),
       body: form,
