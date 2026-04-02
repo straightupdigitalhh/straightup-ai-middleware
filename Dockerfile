@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Dependencies zuerst (Layer-Caching)
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
 
 # TypeScript kompilieren
 COPY tsconfig.json ./
