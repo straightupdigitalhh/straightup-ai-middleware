@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { AworkClient } from '../services/awork.js';
+import { emailPoller } from '../index.js';
 
 const router = Router();
 
@@ -12,6 +13,7 @@ router.get('/health', async (_req: Request, res: Response) => {
     middleware: 'ok',
     awork: 'unknown',
     anthropic: process.env.ANTHROPIC_API_KEY ? 'configured' : 'missing',
+    emailPolling: 'disabled',
   };
 
   try {
@@ -20,6 +22,17 @@ router.get('/health', async (_req: Request, res: Response) => {
     checks.awork = `ok (${projects.length} Projekte)`;
   } catch (e: any) {
     checks.awork = `error: ${e.message}`;
+  }
+
+  // Poller-Status
+  if (emailPoller) {
+    const status = emailPoller.getStatus();
+    checks.emailPolling = status.active
+      ? `aktiv (${status.totalProcessed} verarbeitet, ${status.totalErrors} Fehler)`
+      : 'gestoppt';
+    if (status.lastPollAt) {
+      checks.emailPollingLastPoll = `${status.lastPollAt} — ${status.lastPollResult}`;
+    }
   }
 
   const allOk = checks.awork.startsWith('ok') && checks.anthropic === 'configured';

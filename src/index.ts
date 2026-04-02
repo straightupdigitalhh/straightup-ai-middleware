@@ -3,6 +3,8 @@ import express from 'express';
 import emailRouter from './routes/email.js';
 import transcriptRouter from './routes/transcript.js';
 import healthRouter from './routes/health.js';
+import { MicrosoftGraphClient } from './services/microsoft-graph.js';
+import { EmailPoller } from './services/email-poller.js';
 
 // ─── Konfiguration prüfen ────────────────────────────────────────
 
@@ -67,6 +69,10 @@ app.use((_req, res) => {
 
 // ─── Start ───────────────────────────────────────────────────────
 
+// ─── Email Poller (exportiert für Health-Check) ─────────────────
+
+export let emailPoller: EmailPoller | null = null;
+
 app.listen(PORT, () => {
   console.log('');
   console.log('╔═══════════════════════════════════════════════════╗');
@@ -80,4 +86,28 @@ app.listen(PORT, () => {
   console.log('║    POST /api/transcript  → Transkript verarbeiten  ║');
   console.log('╚═══════════════════════════════════════════════════╝');
   console.log('');
+
+  // E-Mail-Polling starten (nur wenn MS_* Variablen gesetzt sind)
+  const { MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL } = process.env;
+  if (MS_TENANT_ID && MS_CLIENT_ID && MS_CLIENT_SECRET && MS_USER_EMAIL) {
+    const graphClient = new MicrosoftGraphClient(MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL);
+    emailPoller = new EmailPoller(graphClient, {
+      pollInterval: parseInt(process.env.MS_POLL_INTERVAL || '180000', 10),
+      triggerCategory: process.env.MS_TRIGGER_CATEGORY || '→ awork',
+      processedCategory: '✅ verarbeitet',
+    });
+    emailPoller.start();
+  } else {
+    console.log('📭 E-Mail-Polling deaktiviert (MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET oder MS_USER_EMAIL nicht gesetzt)');
+  }
 });
+
+// ─── Graceful Shutdown ──────────────────────────────────────────
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    console.log(`\n${signal} empfangen, fahre herunter...`);
+    if (emailPoller) emailPoller.stop();
+    process.exit(0);
+  });
+}
