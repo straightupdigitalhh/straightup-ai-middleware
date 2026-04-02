@@ -1,4 +1,16 @@
-import { MicrosoftGraphClient, GraphEmail, stripHtml } from './microsoft-graph.js';
+import { MicrosoftGraphClient, type GraphEmail, stripHtml } from './microsoft-graph.js';
+
+// ─── Singleton für Health-Check Zugriff ─────────────────────────
+
+let pollerInstance: EmailPoller | null = null;
+
+export function setPollerInstance(poller: EmailPoller): void {
+  pollerInstance = poller;
+}
+
+export function getPollerInstance(): EmailPoller | null {
+  return pollerInstance;
+}
 import { routeContent, detectCustomer } from './claude.js';
 import { AworkClient } from './awork.js';
 import { AworkResolver } from './resolver.js';

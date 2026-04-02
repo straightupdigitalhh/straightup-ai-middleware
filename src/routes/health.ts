@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { AworkClient } from '../services/awork.js';
-import { emailPoller } from '../index.js';
+import { getPollerInstance } from '../services/email-poller.js';
 
 const router = Router();
 
@@ -25,8 +25,9 @@ router.get('/health', async (_req: Request, res: Response) => {
   }
 
   // Poller-Status
-  if (emailPoller) {
-    const status = emailPoller.getStatus();
+  const pollerInstance = getPollerInstance();
+  if (pollerInstance) {
+    const status = pollerInstance.getStatus();
     checks.emailPolling = status.active
       ? `aktiv (${status.totalProcessed} verarbeitet, ${status.totalErrors} Fehler)`
       : 'gestoppt';
