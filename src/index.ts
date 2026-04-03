@@ -3,6 +3,8 @@ import express from 'express';
 import emailRouter from './routes/email.js';
 import transcriptRouter from './routes/transcript.js';
 import healthRouter from './routes/health.js';
+import lookupRouter from './routes/lookup.js';
+import uiRouter from './routes/ui.js';
 import { MicrosoftGraphClient } from './services/microsoft-graph.js';
 import { EmailPoller, setPollerInstance, getPollerInstance } from './services/email-poller.js';
 
@@ -50,7 +52,9 @@ app.use((req, _res, next) => {
 
 // ─── Routes ──────────────────────────────────────────────────────
 
+app.use(uiRouter);          // GET / (Web-Formular, öffentlich)
 app.use(healthRouter);      // GET /health (öffentlich)
+app.use(lookupRouter);      // GET /api/customers, /api/projects (auth)
 app.use(emailRouter);       // POST /api/email (auth)
 app.use(transcriptRouter);  // POST /api/transcript (auth)
 
