@@ -41,13 +41,14 @@ Vier Datenquellen werden parallel via Subagents erfasst:
 | Quelle | Tool | Was wird erfasst |
 |--------|------|-----------------|
 | Screenshots | Playwright MCP | Full-Page + Hero-Ausschnitt in 3 Viewports: Desktop (1440px), Tablet (768px), Mobile (375px). Gespeichert als PNG in `screenshots/`. |
-| HTML/CSS | Firecrawl | Gerendeter HTML-Content der Startseite. Unterseiten nur wenn der User sie explizit angibt oder der Skill fragt "Soll ich noch weitere Seiten anschauen?". |
+| HTML/CSS | Firecrawl | Gerendeter HTML-Content der Startseite + aller Seiten aus der Hauptnavigation. Firecrawl-Map identifiziert die Seitenstruktur, dann werden alle Hauptnavigations-Seiten gecrawlt. |
+| Seitenstruktur | Playwright + Firecrawl | Hauptnavigation auslesen, Sitemap der Top-Level-Seiten erstellen. Jede Unterseite wird einzeln analysiert, um Content-Layout-Variationen zu erfassen. |
 | Computed Styles | Playwright `browser_evaluate` | Tatsächliche Farben, Font-Sizes, Margins, Paddings, Border-Radii, Transitions — direkt aus dem Browser ausgelesen. |
 | YOOtheme JSON | Datei lesen + parsen | Sektionsstruktur, Element-Hierarchie, Spacing-Werte, Style-Einstellungen, verwendete YOOtheme-Elemente, Custom CSS. |
 
 ### Phase 2: Extract (automatisch)
 
-Aus den Rohdaten werden Findings in 8 Kategorien extrahiert:
+Aus den Rohdaten werden Findings in 9 Kategorien extrahiert:
 
 1. **Typografie** — Font-Familien, Größen, Gewichtungen, Zeilenhöhen, Hierarchie (H1→Body-Verhältnis)
 2. **Farbpalette** — Primär/Sekundär/Akzent/Hintergrund/Text-Farben, Farbverhältnisse, Kontraste
@@ -57,6 +58,7 @@ Aus den Rohdaten werden Findings in 8 Kategorien extrahiert:
 6. **Animation** — Scroll-Effekte, Hover-States, Übergänge, Easing-Funktionen, Parallax
 7. **Bildsprache** — Bildformate, Filter/Overlays, Verhältnis Bild/Text, Bildpositionierung
 8. **Navigation** — Header-Aufbau, Menü-Stil, Footer-Struktur, Mobile-Navigation, Sticky-Verhalten
+9. **Seitenstruktur & Content-Layouts** — Wie variiert die Designerin die Layouts über die Unterseiten? Welche Seitentypen gibt es (Hero-lastig, Text-lastig, Galerie, Team, Kontakt etc.)? Wie unterscheiden sich die Sektionsabfolgen? Welche Layout-Patterns nutzt sie für welchen Content-Typ? Gibt es wiederkehrende Seitenaufbau-Muster oder bewusste Abwechslung?
 
 Zusätzlich: **Visuelle Analyse** — Claude analysiert die Screenshots multimodal und beschreibt den Gesamteindruck, die visuelle Hierarchie und die Komposition in eigenen Worten.
 
@@ -106,16 +108,23 @@ Speicherort: `~/design-knowledge/`
 │   ├── components.md
 │   ├── animation.md
 │   ├── imagery.md
-│   └── navigation.md
+│   ├── navigation.md
+│   └── page-structures.md    # Content-Layout-Variationen über Unterseiten
 ├── yootheme-blueprints/
 │   ├── example-firma-de.json     # Original YOOtheme-Export
 │   └── example-firma-de.annotated.md  # Annotierte lesbare Version
 └── screenshots/
     └── example-firma-de/
-        ├── desktop-full.png
-        ├── desktop-hero.png
-        ├── tablet-full.png
-        └── mobile-full.png
+        ├── home/
+        │   ├── desktop-full.png
+        │   ├── tablet-full.png
+        │   └── mobile-full.png
+        ├── ueber-uns/
+        │   ├── desktop-full.png
+        │   └── mobile-full.png
+        ├── leistungen/
+        │   └── desktop-full.png
+        └── ...                       # Eine Unterordner pro Navigationsseite
 ```
 
 ### STYLE-PROFILE.md
@@ -130,7 +139,7 @@ Wird nach jeder Analyse inkrementell aktualisiert, nicht neu geschrieben. Neue E
 
 ### Pattern-Dateien
 
-Jede der 8 Pattern-Dateien enthält:
+Jede der 9 Pattern-Dateien enthält:
 - Tabelle mit konkreten Werten pro Website
 - Erkanntes Muster / Regel
 - User-Feedback zu diesem Pattern
