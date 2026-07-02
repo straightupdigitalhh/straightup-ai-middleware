@@ -50,6 +50,24 @@ describe('validateTicketPayload', () => {
     const r = validateTicketPayload({ ...validPayload, screenshot: 'data:image/jpeg;base64,AAAA' });
     expect(r.ok).toBe(false);
   });
+
+  it('lehnt rect mit Nicht-Zahlen ab', () => {
+    const r = validateTicketPayload({
+      ...validPayload,
+      element: { selector: '#a', rect: { x: 'nope', y: 0, width: 1, height: 1 } },
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('lehnt assigneeId mit falschem Typ ab', () => {
+    const r = validateTicketPayload({ ...validPayload, assigneeId: 12345 });
+    expect(r.ok).toBe(false);
+  });
+
+  it('akzeptiert assigneeId als String und als null', () => {
+    expect(validateTicketPayload({ ...validPayload, assigneeId: 'u1' }).ok).toBe(true);
+    expect(validateTicketPayload({ ...validPayload, assigneeId: null }).ok).toBe(true);
+  });
 });
 
 describe('buildTicketDescriptionHtml', () => {

@@ -50,6 +50,22 @@ export function validateTicketPayload(
   if (!b.element || typeof b.element.selector !== 'string' || !b.element.rect) {
     return { ok: false, message: 'element.selector / element.rect fehlen' };
   }
+  if (
+    typeof b.element.rect !== 'object' ||
+    typeof b.element.rect.x !== 'number' ||
+    typeof b.element.rect.y !== 'number' ||
+    typeof b.element.rect.width !== 'number' ||
+    typeof b.element.rect.height !== 'number' ||
+    !Number.isFinite(b.element.rect.x) ||
+    !Number.isFinite(b.element.rect.y) ||
+    !Number.isFinite(b.element.rect.width) ||
+    !Number.isFinite(b.element.rect.height)
+  ) {
+    return { ok: false, message: 'element.rect muss x/y/width/height als Zahlen enthalten' };
+  }
+  if (b.assigneeId !== undefined && b.assigneeId !== null && typeof b.assigneeId !== 'string') {
+    return { ok: false, message: 'assigneeId muss ein String oder null sein' };
+  }
   const env = b.environment;
   if (!env || !env.viewport || !env.screen || typeof env.userAgent !== 'string' || typeof env.timestamp !== 'string') {
     return { ok: false, message: 'environment unvollständig' };
