@@ -9,4 +9,6 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - API_KEY=${API_KEY}
       - PORT=3500
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped

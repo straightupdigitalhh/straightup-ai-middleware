@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "tsx scripts/feedback-integration-test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

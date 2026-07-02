@@ -114,6 +114,8 @@ app.listen(PORT, () => {
   console.log('║    GET  /health          → Health-Check            ║');
   console.log('║    POST /api/email       → E-Mail verarbeiten      ║');
   console.log('║    POST /api/transcript  → Transkript verarbeiten  ║');
+  console.log('║    POST /feedback/tickets → Extension-Feedback     ║');
+  console.log('║    /api/feedback-keys     → Key-Verwaltung          ║');
   console.log('╚═══════════════════════════════════════════════════╝');
   console.log('');
 
