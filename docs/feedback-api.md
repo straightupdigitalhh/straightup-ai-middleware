@@ -27,6 +27,15 @@ Antwort enthält `key` (`fbk_…`) → an die Reporter geben.
 
 Die Task-Liste „Website-Feedback" wird im awork-Projekt automatisch angelegt.
 
+> **Wichtig – `defaultAssigneeId` muss ein echter Mensch sein.** In der Praxis
+> verifiziert: awork lehnt die Zuweisung an einen **API-Key-User** ab
+> (`"...are API key users. No user was assigned."`). Verwende die User-ID einer
+> echten Person aus `awork users list` (bzw. der awork-Oberfläche) – **nicht**
+> die ID des API-Tokens. Eine vorherige Projektmitgliedschaft ist nicht nötig;
+> awork ordnet den User beim Zuweisen automatisch zu. Bei falscher ID wird die
+> Task trotzdem angelegt (Best-Effort), bleibt aber **unassigned** und die
+> Middleware loggt eine `⚠️ Zuweisung fehlgeschlagen`-Warnung.
+
 ## Keys auflisten / widerrufen
 
 ```bash
