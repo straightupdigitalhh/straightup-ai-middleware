@@ -5,6 +5,10 @@ import transcriptRouter from './routes/transcript.js';
 import healthRouter from './routes/health.js';
 import lookupRouter from './routes/lookup.js';
 import uiRouter from './routes/ui.js';
+import { createFeedbackAdminRouter } from './routes/feedback-admin.js';
+import { FeedbackKeyStore } from './services/feedback-keys.js';
+import { AworkClient } from './services/awork.js';
+import { join } from 'path';
 import { MicrosoftGraphClient } from './services/microsoft-graph.js';
 import { EmailPoller, setPollerInstance, getPollerInstance } from './services/email-poller.js';
 
@@ -17,6 +21,13 @@ for (const envVar of requiredEnvVars) {
     process.exit(1);
   }
 }
+
+// ─── Feedback-Infrastruktur ──────────────────────────────────────
+
+const feedbackKeyStore = new FeedbackKeyStore(
+  join(process.env.FEEDBACK_DATA_DIR || './data', 'feedback-keys.json'),
+);
+const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
 
 // ─── Express App ─────────────────────────────────────────────────
 
@@ -57,6 +68,7 @@ app.use(healthRouter);      // GET /health (öffentlich)
 app.use(lookupRouter);      // GET /api/customers, /api/projects (auth)
 app.use(emailRouter);       // POST /api/email (auth)
 app.use(transcriptRouter);  // POST /api/transcript (auth)
+app.use(createFeedbackAdminRouter({ store: feedbackKeyStore, awork: aworkClient })); // /api/feedback-keys (auth)
 
 // ─── 404 Handler ─────────────────────────────────────────────────
 
@@ -67,6 +79,8 @@ app.use((_req, res) => {
       'GET /health': 'Health-Check',
       'POST /api/email': 'E-Mail verarbeiten → awork',
       'POST /api/transcript': 'Transkript verarbeiten → awork',
+      'POST /api/feedback-keys': 'Feedback-Key anlegen',
+      'GET /api/feedback-keys': 'Feedback-Keys auflisten',
     },
   });
 });

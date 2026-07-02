@@ -1,0 +1,94 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import { mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { FeedbackKeyStore } from '../src/services/feedback-keys.js';
+import { createFeedbackAdminRouter } from '../src/routes/feedback-admin.js';
+
+function makeApp(aworkStub: any) {
+  const store = new FeedbackKeyStore(join(mkdtempSync(join(tmpdir(), 'fbadmin-')), 'keys.json'));
+  const app = express();
+  app.use(express.json());
+  app.use(createFeedbackAdminRouter({ store, awork: aworkStub }));
+  return { app, store };
+}
+
+const validBody = {
+  projectId: 'proj-1',
+  domains: ['kunde.de'],
+  type: 'customer',
+  defaultAssigneeId: 'user-1',
+  label: 'Kunde XY',
+};
+
+describe('POST /api/feedback-keys', () => {
+  it('nutzt existierende Website-Feedback-Liste', async () => {
+    const awork = {
+      getTaskLists: vi.fn().mockResolvedValue([{ id: 'list-9', name: 'Website-Feedback' }]),
+      createTaskList: vi.fn(),
+    };
+    const { app } = makeApp(awork);
+    const res = await request(app).post('/api/feedback-keys').send(validBody);
+    expect(res.status).toBe(201);
+    expect(res.body.key).toMatch(/^fbk_/);
+    expect(res.body.taskListId).toBe('list-9');
+    expect(awork.createTaskList).not.toHaveBeenCalled();
+  });
+
+  it('legt Website-Feedback-Liste an, wenn sie fehlt', async () => {
+    const awork = {
+      getTaskLists: vi.fn().mockResolvedValue([{ id: 'l1', name: 'Sprint 1' }]),
+      createTaskList: vi.fn().mockResolvedValue({ id: 'list-neu', name: 'Website-Feedback' }),
+    };
+    const { app } = makeApp(awork);
+    const res = await request(app).post('/api/feedback-keys').send(validBody);
+    expect(res.status).toBe(201);
+    expect(awork.createTaskList).toHaveBeenCalledWith('proj-1', 'Website-Feedback');
+    expect(res.body.taskListId).toBe('list-neu');
+  });
+
+  it('400 bei fehlender projectId', async () => {
+    const { app } = makeApp({ getTaskLists: vi.fn(), createTaskList: vi.fn() });
+    const res = await request(app).post('/api/feedback-keys').send({ ...validBody, projectId: undefined });
+    expect(res.status).toBe(400);
+  });
+
+  it('400 bei leeren domains', async () => {
+    const { app } = makeApp({ getTaskLists: vi.fn(), createTaskList: vi.fn() });
+    const res = await request(app).post('/api/feedback-keys').send({ ...validBody, domains: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('400 bei type customer ohne defaultAssigneeId', async () => {
+    const { app } = makeApp({ getTaskLists: vi.fn(), createTaskList: vi.fn() });
+    const res = await request(app).post('/api/feedback-keys').send({ ...validBody, defaultAssigneeId: undefined });
+    expect(res.status).toBe(400);
+  });
+
+  it('502 wenn awork nicht erreichbar', async () => {
+    const awork = { getTaskLists: vi.fn().mockRejectedValue(new Error('down')), createTaskList: vi.fn() };
+    const { app } = makeApp(awork);
+    const res = await request(app).post('/api/feedback-keys').send(validBody);
+    expect(res.status).toBe(502);
+  });
+});
+
+describe('GET + DELETE /api/feedback-keys', () => {
+  it('listet Keys und widerruft per DELETE', async () => {
+    const awork = { getTaskLists: vi.fn().mockResolvedValue([{ id: 'l', name: 'Website-Feedback' }]), createTaskList: vi.fn() };
+    const { app } = makeApp(awork);
+    const created = await request(app).post('/api/feedback-keys').send(validBody);
+
+    const list = await request(app).get('/api/feedback-keys');
+    expect(list.status).toBe(200);
+    expect(list.body).toHaveLength(1);
+
+    const del = await request(app).delete(`/api/feedback-keys/${created.body.key}`);
+    expect(del.status).toBe(204);
+
+    const delAgain = await request(app).delete(`/api/feedback-keys/${created.body.key}`);
+    expect(delAgain.status).toBe(404);
+  });
+});
