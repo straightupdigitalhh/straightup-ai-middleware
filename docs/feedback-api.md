@@ -34,9 +34,15 @@ curl -H "X-API-Key: $API_KEY" https://<middleware-host>/api/feedback-keys
 curl -X DELETE -H "X-API-Key: $API_KEY" https://<middleware-host>/api/feedback-keys/fbk_…
 ```
 
+Unbekannter oder bereits widerrufener Key → `404 { error: "not_found" }`.
+
 ## Extension-Endpoints (Auth: X-Feedback-Key)
 
 - `GET /feedback/session` → `{ label, projectName, type, members? }`
 - `POST /feedback/tickets` → `201 { taskId, taskUrl, screenshotAttached }`
   Fehler: 400 validation · 401 invalid_key · 403 domain_not_allowed ·
   429 rate_limited (60/h/Key) · 502 awork_unreachable
+
+  Die Task wird immer angelegt, sobald die Validierung durchläuft – Screenshot-Upload
+  und Assignee-Zuweisung sind Best-Effort und schlagen nur intern fehl (Response bleibt
+  201). `screenshotAttached: false` zeigt an, dass kein Screenshot angehängt wurde.

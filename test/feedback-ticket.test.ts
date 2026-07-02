@@ -68,6 +68,22 @@ describe('validateTicketPayload', () => {
     expect(validateTicketPayload({ ...validPayload, assigneeId: 'u1' }).ok).toBe(true);
     expect(validateTicketPayload({ ...validPayload, assigneeId: null }).ok).toBe(true);
   });
+
+  it('lehnt nicht-numerische viewport-Werte ab (HTML-Injection-Schutz)', () => {
+    const r = validateTicketPayload({
+      ...validPayload,
+      environment: { ...validPayload.environment, viewport: { width: '<img src=x onerror=alert(1)>', height: 900 } },
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('lehnt nicht-numerischen devicePixelRatio ab', () => {
+    const r = validateTicketPayload({
+      ...validPayload,
+      environment: { ...validPayload.environment, devicePixelRatio: '2; DROP' },
+    });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe('buildTicketDescriptionHtml', () => {

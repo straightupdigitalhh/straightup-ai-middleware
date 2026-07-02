@@ -70,6 +70,20 @@ export function validateTicketPayload(
   if (!env || !env.viewport || !env.screen || typeof env.userAgent !== 'string' || typeof env.timestamp !== 'string') {
     return { ok: false, message: 'environment unvollständig' };
   }
+  if (
+    typeof env.viewport.width !== 'number' ||
+    typeof env.viewport.height !== 'number' ||
+    typeof env.screen.width !== 'number' ||
+    typeof env.screen.height !== 'number' ||
+    typeof env.devicePixelRatio !== 'number' ||
+    !Number.isFinite(env.viewport.width) ||
+    !Number.isFinite(env.viewport.height) ||
+    !Number.isFinite(env.screen.width) ||
+    !Number.isFinite(env.screen.height) ||
+    !Number.isFinite(env.devicePixelRatio)
+  ) {
+    return { ok: false, message: 'environment enthält ungültige Zahlenwerte' };
+  }
   if (b.screenshot != null) {
     if (typeof b.screenshot !== 'string' || !b.screenshot.startsWith(SCREENSHOT_PREFIX)) {
       return { ok: false, message: 'screenshot muss ein PNG-Data-URL sein' };
