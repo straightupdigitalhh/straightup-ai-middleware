@@ -6,6 +6,7 @@ import healthRouter from './routes/health.js';
 import lookupRouter from './routes/lookup.js';
 import uiRouter from './routes/ui.js';
 import { createFeedbackAdminRouter } from './routes/feedback-admin.js';
+import { createFeedbackRouter } from './routes/feedback.js';
 import { FeedbackKeyStore } from './services/feedback-keys.js';
 import { AworkClient } from './services/awork.js';
 import { join } from 'path';
@@ -22,6 +23,10 @@ for (const envVar of requiredEnvVars) {
   }
 }
 
+if (!process.env.AWORK_WORKSPACE_URL) {
+  console.warn('⚠️  AWORK_WORKSPACE_URL nicht gesetzt – Ticket-Antworten enthalten keinen Task-Link');
+}
+
 // ─── Feedback-Infrastruktur ──────────────────────────────────────
 
 const feedbackKeyStore = new FeedbackKeyStore(
@@ -33,6 +38,15 @@ const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3500', 10);
+
+// ─── Feedback-Routen (Extension) ─────────────────────────────────
+// VOR den globalen Body-Parsern: /feedback hat ein eigenes 20-MB-Limit.
+// Auth läuft über projektspezifische X-Feedback-Keys, nicht den Master-Key.
+app.use('/feedback', createFeedbackRouter({
+  store: feedbackKeyStore,
+  awork: aworkClient,
+  workspaceUrl: process.env.AWORK_WORKSPACE_URL || '',
+}));
 
 // JSON + URL-encoded Body Parsing
 app.use(express.json({ limit: '5mb' }));
