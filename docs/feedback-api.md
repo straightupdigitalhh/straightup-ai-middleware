@@ -1,6 +1,6 @@
 # Website-Feedback API
 
-Backend für die Chrome-Extension „straightup Feedback".
+Backend für die Chrome-Extension „straightup BugBee".
 Spec: straightup-bugbee/docs/superpowers/specs/2026-07-02-website-feedback-extension-design.md
 
 ## Key anlegen (einmalig pro Kundenprojekt)
