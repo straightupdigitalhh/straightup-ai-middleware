@@ -6,7 +6,10 @@ services:
     environment:
       - AWORK_API_TOKEN=${AWORK_API_TOKEN}
       - AWORK_BASE_URL=${AWORK_BASE_URL:-https://api.awork.com/api/v1}
+      - AWORK_WORKSPACE_URL=${AWORK_WORKSPACE_URL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - API_KEY=${API_KEY}
       - PORT=3500
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped

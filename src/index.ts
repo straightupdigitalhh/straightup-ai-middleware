@@ -5,6 +5,12 @@ import transcriptRouter from './routes/transcript.js';
 import healthRouter from './routes/health.js';
 import lookupRouter from './routes/lookup.js';
 import uiRouter from './routes/ui.js';
+import feedbackAdminUiRouter from './routes/feedback-admin-ui.js';
+import { createFeedbackAdminRouter } from './routes/feedback-admin.js';
+import { createFeedbackRouter } from './routes/feedback.js';
+import { FeedbackKeyStore } from './services/feedback-keys.js';
+import { AworkClient } from './services/awork.js';
+import { join } from 'path';
 import { MicrosoftGraphClient } from './services/microsoft-graph.js';
 import { EmailPoller, setPollerInstance, getPollerInstance } from './services/email-poller.js';
 
@@ -18,10 +24,30 @@ for (const envVar of requiredEnvVars) {
   }
 }
 
+if (!process.env.AWORK_WORKSPACE_URL) {
+  console.warn('⚠️  AWORK_WORKSPACE_URL nicht gesetzt – Ticket-Antworten enthalten keinen Task-Link');
+}
+
+// ─── Feedback-Infrastruktur ──────────────────────────────────────
+
+const feedbackKeyStore = new FeedbackKeyStore(
+  join(process.env.FEEDBACK_DATA_DIR || './data', 'feedback-keys.json'),
+);
+const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
+
 // ─── Express App ─────────────────────────────────────────────────
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3500', 10);
+
+// ─── Feedback-Routen (Extension) ─────────────────────────────────
+// VOR den globalen Body-Parsern: /feedback hat ein eigenes 20-MB-Limit.
+// Auth läuft über projektspezifische X-Feedback-Keys, nicht den Master-Key.
+app.use('/feedback', createFeedbackRouter({
+  store: feedbackKeyStore,
+  awork: aworkClient,
+  workspaceUrl: process.env.AWORK_WORKSPACE_URL || '',
+}));
 
 // JSON + URL-encoded Body Parsing
 app.use(express.json({ limit: '5mb' }));
@@ -53,10 +79,12 @@ app.use((req, _res, next) => {
 // ─── Routes ──────────────────────────────────────────────────────
 
 app.use(uiRouter);          // GET / (Web-Formular, öffentlich)
+app.use(feedbackAdminUiRouter); // GET /feedback-admin (Verbindungen verwalten, öffentlich)
 app.use(healthRouter);      // GET /health (öffentlich)
 app.use(lookupRouter);      // GET /api/customers, /api/projects (auth)
 app.use(emailRouter);       // POST /api/email (auth)
 app.use(transcriptRouter);  // POST /api/transcript (auth)
+app.use(createFeedbackAdminRouter({ store: feedbackKeyStore, awork: aworkClient })); // /api/feedback-keys (auth)
 
 // ─── 404 Handler ─────────────────────────────────────────────────
 
@@ -67,6 +95,9 @@ app.use((_req, res) => {
       'GET /health': 'Health-Check',
       'POST /api/email': 'E-Mail verarbeiten → awork',
       'POST /api/transcript': 'Transkript verarbeiten → awork',
+      'POST /api/feedback-keys': 'Feedback-Key anlegen',
+      'GET /api/feedback-keys': 'Feedback-Keys auflisten',
+      'GET /feedback-admin': 'Verbindungen verwalten',
     },
   });
 });
@@ -86,6 +117,9 @@ app.listen(PORT, () => {
   console.log('║    GET  /health          → Health-Check            ║');
   console.log('║    POST /api/email       → E-Mail verarbeiten      ║');
   console.log('║    POST /api/transcript  → Transkript verarbeiten  ║');
+  console.log('║    POST /feedback/tickets → Extension-Feedback     ║');
+  console.log('║    /api/feedback-keys     → Key-Verwaltung          ║');
+  console.log('║    GET  /feedback-admin  → Verbindungen verwalten  ║');
   console.log('╚═══════════════════════════════════════════════════╝');
   console.log('');
 

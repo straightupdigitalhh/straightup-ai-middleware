@@ -31,6 +31,16 @@ export interface AworkTask {
   projectId: string;
 }
 
+export interface AworkProjectMember {
+  id: string;
+  userId: string;
+  firstName: string | null;
+  lastName: string | null;
+  projectRoleName?: string;
+  isDeactivated?: boolean;
+  isExternal?: boolean;
+}
+
 // ─── Client ──────────────────────────────────────────────────────
 
 export class AworkClient {
@@ -83,6 +93,22 @@ export class AworkClient {
 
   async getTaskLists(projectId: string): Promise<AworkTaskList[]> {
     return this.request(`/projects/${projectId}/tasklists`);
+  }
+
+  async getProject(projectId: string): Promise<AworkProject> {
+    return this.request(`/projects/${projectId}`);
+  }
+
+  async getProjectMembers(projectId: string): Promise<AworkProjectMember[]> {
+    return this.request(`/projects/${projectId}/members`);
+  }
+
+  async createTaskList(projectId: string, name: string): Promise<AworkTaskList> {
+    return this.request(`/projects/${projectId}/tasklists`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
   }
 
   // ─── Documents ───────────────────────────────────────────────
@@ -148,6 +174,15 @@ export class AworkClient {
     });
   }
 
+  /** Body ist lt. awork-OpenAPI ein reines Array von User-UUIDs. Antwort: 204. */
+  async setTaskAssignees(taskId: string, userIds: string[]): Promise<void> {
+    await this.request(`/tasks/${taskId}/setassignees`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(userIds),
+    });
+  }
+
   // ─── Files ───────────────────────────────────────────────────
 
   async uploadProjectFile(projectId: string, fileBuffer: Buffer, filename: string): Promise<any> {
@@ -155,6 +190,18 @@ export class AworkClient {
     form.append('file', fileBuffer, { filename });
 
     return this.request(`/projects/${projectId}/files`, {
+      method: 'POST',
+      headers: form.getHeaders(),
+      body: form,
+    });
+  }
+
+  /** Multipart-Feld heißt lt. awork-OpenAPI "File" (großes F). */
+  async uploadTaskFile(taskId: string, fileBuffer: Buffer, filename: string, contentType: string): Promise<any> {
+    const form = new FormData();
+    form.append('File', fileBuffer, { filename, contentType });
+
+    return this.request(`/tasks/${taskId}/files`, {
       method: 'POST',
       headers: form.getHeaders(),
       body: form,
