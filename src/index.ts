@@ -5,6 +5,7 @@ import transcriptRouter from './routes/transcript.js';
 import healthRouter from './routes/health.js';
 import lookupRouter from './routes/lookup.js';
 import uiRouter from './routes/ui.js';
+import feedbackAdminUiRouter from './routes/feedback-admin-ui.js';
 import { createFeedbackAdminRouter } from './routes/feedback-admin.js';
 import { createFeedbackRouter } from './routes/feedback.js';
 import { FeedbackKeyStore } from './services/feedback-keys.js';
@@ -78,6 +79,7 @@ app.use((req, _res, next) => {
 // ─── Routes ──────────────────────────────────────────────────────
 
 app.use(uiRouter);          // GET / (Web-Formular, öffentlich)
+app.use(feedbackAdminUiRouter); // GET /feedback-admin (Verbindungen verwalten, öffentlich)
 app.use(healthRouter);      // GET /health (öffentlich)
 app.use(lookupRouter);      // GET /api/customers, /api/projects (auth)
 app.use(emailRouter);       // POST /api/email (auth)
@@ -95,6 +97,7 @@ app.use((_req, res) => {
       'POST /api/transcript': 'Transkript verarbeiten → awork',
       'POST /api/feedback-keys': 'Feedback-Key anlegen',
       'GET /api/feedback-keys': 'Feedback-Keys auflisten',
+      'GET /feedback-admin': 'Verbindungen verwalten',
     },
   });
 });
@@ -116,6 +119,7 @@ app.listen(PORT, () => {
   console.log('║    POST /api/transcript  → Transkript verarbeiten  ║');
   console.log('║    POST /feedback/tickets → Extension-Feedback     ║');
   console.log('║    /api/feedback-keys     → Key-Verwaltung          ║');
+  console.log('║    GET  /feedback-admin  → Verbindungen verwalten  ║');
   console.log('╚═══════════════════════════════════════════════════╝');
   console.log('');
 

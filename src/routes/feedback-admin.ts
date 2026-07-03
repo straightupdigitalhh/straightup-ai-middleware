@@ -6,7 +6,7 @@ export const FEEDBACK_LIST_NAME = 'Website-Feedback';
 
 interface Deps {
   store: FeedbackKeyStore;
-  awork: Pick<AworkClient, 'getTaskLists' | 'createTaskList'>;
+  awork: Pick<AworkClient, 'getTaskLists' | 'createTaskList' | 'getProjects' | 'getProjectMembers'>;
 }
 
 /**
@@ -74,6 +74,40 @@ export function createFeedbackAdminRouter({ store, awork }: Deps): Router {
       res.status(204).end();
     } else {
       res.status(404).json({ error: 'not_found', message: 'Key unbekannt oder bereits widerrufen' });
+    }
+  });
+
+  // ─── Hilfs-Endpoints für die Admin-Oberfläche ───────────────────
+
+  // Projektliste für die Projekt-Auswahl (Select/Datalist)
+  router.get('/api/feedback-keys/projects', async (_req: Request, res: Response) => {
+    try {
+      const projects = await awork.getProjects();
+      const mapped = projects
+        .map(p => ({ id: p.id, name: p.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      res.json(mapped);
+    } catch (e: any) {
+      console.error(`❌ Projektliste konnte nicht geladen werden: ${e.message}`);
+      res.status(502).json({ error: 'awork_unreachable', message: e.message });
+    }
+  });
+
+  // Projektmitglieder für die Standard-Assignee-Auswahl (nur aktive Mitglieder)
+  router.get('/api/feedback-keys/project-members/:projectId', async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.projectId as string;
+      const members = await awork.getProjectMembers(projectId);
+      const mapped = members
+        .filter(m => !m.isDeactivated)
+        .map(m => ({
+          id: m.userId,
+          name: [m.firstName, m.lastName].filter(Boolean).join(' ') || 'Unbenannt',
+        }));
+      res.json(mapped);
+    } catch (e: any) {
+      console.error(`❌ Projektmitglieder konnten nicht geladen werden: ${e.message}`);
+      res.status(502).json({ error: 'awork_unreachable', message: e.message });
     }
   });
 

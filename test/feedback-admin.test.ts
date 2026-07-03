@@ -28,6 +28,8 @@ describe('POST /api/feedback-keys', () => {
     const awork = {
       getTaskLists: vi.fn().mockResolvedValue([{ id: 'list-9', name: 'Website-Feedback' }]),
       createTaskList: vi.fn(),
+      getProjects: vi.fn(),
+      getProjectMembers: vi.fn(),
     };
     const { app } = makeApp(awork);
     const res = await request(app).post('/api/feedback-keys').send(validBody);
@@ -41,6 +43,8 @@ describe('POST /api/feedback-keys', () => {
     const awork = {
       getTaskLists: vi.fn().mockResolvedValue([{ id: 'l1', name: 'Sprint 1' }]),
       createTaskList: vi.fn().mockResolvedValue({ id: 'list-neu', name: 'Website-Feedback' }),
+      getProjects: vi.fn(),
+      getProjectMembers: vi.fn(),
     };
     const { app } = makeApp(awork);
     const res = await request(app).post('/api/feedback-keys').send(validBody);
@@ -50,25 +54,25 @@ describe('POST /api/feedback-keys', () => {
   });
 
   it('400 bei fehlender projectId', async () => {
-    const { app } = makeApp({ getTaskLists: vi.fn(), createTaskList: vi.fn() });
+    const { app } = makeApp({ getTaskLists: vi.fn(), createTaskList: vi.fn(), getProjects: vi.fn(), getProjectMembers: vi.fn() });
     const res = await request(app).post('/api/feedback-keys').send({ ...validBody, projectId: undefined });
     expect(res.status).toBe(400);
   });
 
   it('400 bei leeren domains', async () => {
-    const { app } = makeApp({ getTaskLists: vi.fn(), createTaskList: vi.fn() });
+    const { app } = makeApp({ getTaskLists: vi.fn(), createTaskList: vi.fn(), getProjects: vi.fn(), getProjectMembers: vi.fn() });
     const res = await request(app).post('/api/feedback-keys').send({ ...validBody, domains: [] });
     expect(res.status).toBe(400);
   });
 
   it('400 bei type customer ohne defaultAssigneeId', async () => {
-    const { app } = makeApp({ getTaskLists: vi.fn(), createTaskList: vi.fn() });
+    const { app } = makeApp({ getTaskLists: vi.fn(), createTaskList: vi.fn(), getProjects: vi.fn(), getProjectMembers: vi.fn() });
     const res = await request(app).post('/api/feedback-keys').send({ ...validBody, defaultAssigneeId: undefined });
     expect(res.status).toBe(400);
   });
 
   it('502 wenn awork nicht erreichbar', async () => {
-    const awork = { getTaskLists: vi.fn().mockRejectedValue(new Error('down')), createTaskList: vi.fn() };
+    const awork = { getTaskLists: vi.fn().mockRejectedValue(new Error('down')), createTaskList: vi.fn(), getProjects: vi.fn(), getProjectMembers: vi.fn() };
     const { app } = makeApp(awork);
     const res = await request(app).post('/api/feedback-keys').send(validBody);
     expect(res.status).toBe(502);
@@ -77,7 +81,7 @@ describe('POST /api/feedback-keys', () => {
 
 describe('GET + DELETE /api/feedback-keys', () => {
   it('listet Keys und widerruft per DELETE', async () => {
-    const awork = { getTaskLists: vi.fn().mockResolvedValue([{ id: 'l', name: 'Website-Feedback' }]), createTaskList: vi.fn() };
+    const awork = { getTaskLists: vi.fn().mockResolvedValue([{ id: 'l', name: 'Website-Feedback' }]), createTaskList: vi.fn(), getProjects: vi.fn(), getProjectMembers: vi.fn() };
     const { app } = makeApp(awork);
     const created = await request(app).post('/api/feedback-keys').send(validBody);
 
@@ -90,5 +94,108 @@ describe('GET + DELETE /api/feedback-keys', () => {
 
     const delAgain = await request(app).delete(`/api/feedback-keys/${created.body.key}`);
     expect(delAgain.status).toBe(404);
+  });
+});
+
+describe('GET /api/feedback-keys/projects', () => {
+  it('gibt Projekte sortiert nach Name als {id,name}[] zurück', async () => {
+    const awork = {
+      getTaskLists: vi.fn(),
+      createTaskList: vi.fn(),
+      getProjects: vi.fn().mockResolvedValue([
+        { id: 'p-2', name: 'Zeta-Projekt', companyId: 'c-1' },
+        { id: 'p-1', name: 'Alpha-Projekt', companyId: 'c-2' },
+        { id: 'p-3', name: 'Mitte-Projekt' },
+      ]),
+      getProjectMembers: vi.fn(),
+    };
+    const { app } = makeApp(awork);
+    const res = await request(app).get('/api/feedback-keys/projects');
+
+    expect(res.status).toBe(200);
+    expect(awork.getProjects).toHaveBeenCalled();
+    expect(res.body).toEqual([
+      { id: 'p-1', name: 'Alpha-Projekt' },
+      { id: 'p-3', name: 'Mitte-Projekt' },
+      { id: 'p-2', name: 'Zeta-Projekt' },
+    ]);
+  });
+
+  it('502 wenn awork nicht erreichbar', async () => {
+    const awork = {
+      getTaskLists: vi.fn(),
+      createTaskList: vi.fn(),
+      getProjects: vi.fn().mockRejectedValue(new Error('awork down')),
+      getProjectMembers: vi.fn(),
+    };
+    const { app } = makeApp(awork);
+    const res = await request(app).get('/api/feedback-keys/projects');
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: 'awork_unreachable', message: 'awork down' });
+  });
+});
+
+describe('GET /api/feedback-keys/project-members/:projectId', () => {
+  it('filtert deaktivierte Mitglieder heraus, behält aktive, mappt userId auf id', async () => {
+    const awork = {
+      getTaskLists: vi.fn(),
+      createTaskList: vi.fn(),
+      getProjects: vi.fn(),
+      getProjectMembers: vi.fn().mockResolvedValue([
+        { id: 'm-1', userId: 'user-1', firstName: 'Anna', lastName: 'Muster', isDeactivated: false },
+        { id: 'm-2', userId: 'user-2', firstName: 'Bruno', lastName: 'Weg', isDeactivated: true },
+      ]),
+    };
+    const { app } = makeApp(awork);
+    const res = await request(app).get('/api/feedback-keys/project-members/proj-1');
+
+    expect(res.status).toBe(200);
+    expect(awork.getProjectMembers).toHaveBeenCalledWith('proj-1');
+    expect(res.body).toEqual([{ id: 'user-1', name: 'Anna Muster' }]);
+  });
+
+  it('verbindet firstName + lastName mit Leerzeichen', async () => {
+    const awork = {
+      getTaskLists: vi.fn(),
+      createTaskList: vi.fn(),
+      getProjects: vi.fn(),
+      getProjectMembers: vi.fn().mockResolvedValue([
+        { id: 'm-1', userId: 'user-1', firstName: 'Anna', lastName: 'Muster' },
+      ]),
+    };
+    const { app } = makeApp(awork);
+    const res = await request(app).get('/api/feedback-keys/project-members/proj-1');
+
+    expect(res.body).toEqual([{ id: 'user-1', name: 'Anna Muster' }]);
+  });
+
+  it('fällt auf "Unbenannt" zurück, wenn firstName und lastName leer/null sind', async () => {
+    const awork = {
+      getTaskLists: vi.fn(),
+      createTaskList: vi.fn(),
+      getProjects: vi.fn(),
+      getProjectMembers: vi.fn().mockResolvedValue([
+        { id: 'm-1', userId: 'user-1', firstName: null, lastName: null },
+      ]),
+    };
+    const { app } = makeApp(awork);
+    const res = await request(app).get('/api/feedback-keys/project-members/proj-1');
+
+    expect(res.body).toEqual([{ id: 'user-1', name: 'Unbenannt' }]);
+  });
+
+  it('502 wenn awork nicht erreichbar', async () => {
+    const awork = {
+      getTaskLists: vi.fn(),
+      createTaskList: vi.fn(),
+      getProjects: vi.fn(),
+      getProjectMembers: vi.fn().mockRejectedValue(new Error('awork down')),
+    };
+    const { app } = makeApp(awork);
+    const res = await request(app).get('/api/feedback-keys/project-members/proj-1');
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: 'awork_unreachable', message: 'awork down' });
   });
 });
