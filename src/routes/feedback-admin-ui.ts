@@ -325,7 +325,9 @@ const HTML = `<!DOCTYPE html>
 
       if (!project) { showStatus('create-status', 'Bitte ein gültiges awork-Projekt auswählen.', 'error'); return; }
 
-      const domains = domainsRaw.split(/[,\n]/).map(d => d.trim()).filter(d => d.length > 0);
+      // Achtung Template-Literal: Backslash doppelt schreiben, sonst landet eine echte
+      // Zeilenschaltung im Regex-Literal und das gesamte Seiten-Script bricht (SyntaxError).
+      const domains = domainsRaw.split(/[,\\n]/).map(d => d.trim()).filter(d => d.length > 0);
       if (domains.length === 0) { showStatus('create-status', 'Bitte mindestens eine Domain angeben.', 'error'); return; }
 
       if (!label) { showStatus('create-status', 'Bitte ein Label angeben.', 'error'); return; }

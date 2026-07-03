@@ -199,3 +199,26 @@ describe('GET /api/feedback-keys/project-members/:projectId', () => {
     expect(res.body).toEqual({ error: 'awork_unreachable', message: 'awork down' });
   });
 });
+
+// ─── Admin-Seite: ausgeliefertes Inline-Script muss gültiges JS sein ──
+// Regression: ein \n statt \\n im Template-Literal zerbrach das Regex-Literal
+// im Browser (SyntaxError → komplette Seite funktionslos), während alle
+// Server-Tests grün blieben. Dieser Test parst das Script wie ein Browser.
+describe('GET /feedback-admin (UI)', () => {
+  it('liefert HTML, dessen Inline-Script syntaktisch gültig ist', async () => {
+    const { default: uiRouter } = await import('../src/routes/feedback-admin-ui.js');
+    const app = express();
+    app.use(uiRouter);
+
+    const res = await request(app).get('/feedback-admin');
+    expect(res.status).toBe(200);
+    expect(res.type).toMatch(/html/);
+
+    const match = res.text.match(/<script>([\s\S]*?)<\/script>/);
+    expect(match).not.toBeNull();
+    // wirft bei Syntaxfehler → Test schlägt fehl
+    expect(() => new Function(match![1])).not.toThrow();
+    // das Domain-Split-Regex muss als \n-Escape ankommen, nicht als echte Newline
+    expect(match![1]).toContain('split(/[,\\n]/)');
+  });
+});
