@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { BUGBEE_ICON_DATA_URI } from './bugbee-icon.js';
 
 const router = Router();
 
@@ -8,6 +9,7 @@ const HTML = `<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>straightup BugBee – Verbindungen</title>
+  <link rel="icon" type="image/svg+xml" href="${BUGBEE_ICON_DATA_URI}">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; }
@@ -47,11 +49,16 @@ const HTML = `<!DOCTYPE html>
     .badge.active { background: #e8f5e9; color: #2e7d32; }
     .badge.revoked { background: #f0f0f0; color: #888; }
     .empty-hint { color: #888; font-size: .9rem; padding: .5rem 0; }
+    .brand { display: flex; align-items: center; gap: .75rem; margin-bottom: .25rem; }
+    .brand img { width: 44px; height: 44px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>straightup BugBee</h1>
+    <div class="brand">
+      <img src="${BUGBEE_ICON_DATA_URI}" alt="BugBee">
+      <h1>straightup BugBee</h1>
+    </div>
     <p class="subtitle">Website mit einem awork-Projekt verbinden</p>
 
     <div class="card" id="login-card">

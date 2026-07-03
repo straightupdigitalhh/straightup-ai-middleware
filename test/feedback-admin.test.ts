@@ -220,5 +220,8 @@ describe('GET /feedback-admin (UI)', () => {
     expect(() => new Function(match![1])).not.toThrow();
     // das Domain-Split-Regex muss als \n-Escape ankommen, nicht als echte Newline
     expect(match![1]).toContain('split(/[,\\n]/)');
+    // Branding: Favicon + Header-Logo als eingebettete Data-URI
+    expect(res.text).toContain('data:image/svg+xml;base64,');
+    expect(res.text).toContain('alt="BugBee"');
   });
 });
