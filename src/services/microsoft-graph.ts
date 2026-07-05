@@ -48,8 +48,14 @@ export class MicrosoftGraphClient {
     private tenantId: string,
     private clientId: string,
     private clientSecret: string,
-    private userEmail: string
+    /** Postfach, auf das dieser Client zugreift (lesen + senden). */
+    public readonly userEmail: string
   ) {}
+
+  /** Client für ein anderes Postfach mit denselben App-Zugangsdaten. */
+  forMailbox(userEmail: string): MicrosoftGraphClient {
+    return new MicrosoftGraphClient(this.tenantId, this.clientId, this.clientSecret, userEmail);
+  }
 
   private async getAccessToken(): Promise<string> {
     // Token noch gültig? (5 Min Puffer)

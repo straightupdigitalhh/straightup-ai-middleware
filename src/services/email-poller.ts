@@ -43,15 +43,20 @@ export class EmailPoller {
     totalErrors: 0,
   };
 
+  private graphClients: MicrosoftGraphClient[];
+
   constructor(
-    private graphClient: MicrosoftGraphClient,
+    graphClients: MicrosoftGraphClient | MicrosoftGraphClient[],
     private config: EmailPollerConfig
-  ) {}
+  ) {
+    this.graphClients = Array.isArray(graphClients) ? graphClients : [graphClients];
+  }
 
   start(): void {
     if (this.timer) return;
     this.status.active = true;
-    console.log(`📬 E-Mail-Polling gestartet (alle ${Math.round(this.config.pollInterval / 1000)}s, Kategorie: "${this.config.triggerCategory}")`);
+    const mailboxes = this.graphClients.map(c => c.userEmail).join(', ');
+    console.log(`📬 E-Mail-Polling gestartet (alle ${Math.round(this.config.pollInterval / 1000)}s, Kategorie: "${this.config.triggerCategory}", Postfächer: ${mailboxes})`);
 
     // Erster Poll sofort
     this.poll();
@@ -81,47 +86,48 @@ export class EmailPoller {
     this.isPolling = true;
     let processed = 0;
     let errors = 0;
+    const pollErrors: string[] = [];
 
-    try {
-      const emails = await this.graphClient.getEmailsByCategory(this.config.triggerCategory);
+    // Jedes Postfach unabhängig pollen – ein Fehler (z. B. fehlende
+    // Berechtigung für EIN Postfach) stoppt die anderen nicht.
+    for (const client of this.graphClients) {
+      try {
+        const emails = await client.getEmailsByCategory(this.config.triggerCategory);
+        if (emails.length === 0) continue;
 
-      if (emails.length === 0) {
-        this.status.lastPollAt = new Date().toISOString();
-        this.status.lastPollResult = 'Keine neuen E-Mails';
-        this.isPolling = false;
-        return { processed: 0, errors: 0 };
-      }
+        console.log(`📬 ${emails.length} E-Mail(s) mit Kategorie "${this.config.triggerCategory}" in ${client.userEmail}`);
 
-      console.log(`📬 ${emails.length} E-Mail(s) mit Kategorie "${this.config.triggerCategory}" gefunden`);
-
-      for (const email of emails) {
-        try {
-          await this.processEmail(email);
-          processed++;
-          this.status.totalProcessed++;
-        } catch (error: any) {
-          errors++;
-          this.status.totalErrors++;
-          console.error(`   ❌ Fehler bei E-Mail "${email.subject}": ${error.message}`);
-          // NICHT als verarbeitet markieren → wird beim nächsten Poll erneut versucht
+        for (const email of emails) {
+          try {
+            await this.processEmail(client, email);
+            processed++;
+            this.status.totalProcessed++;
+          } catch (error: any) {
+            errors++;
+            this.status.totalErrors++;
+            console.error(`   ❌ Fehler bei E-Mail "${email.subject}": ${error.message}`);
+            // NICHT als verarbeitet markieren → wird beim nächsten Poll erneut versucht
+          }
         }
+      } catch (error: any) {
+        console.error(`📬 Poll-Fehler (${client.userEmail}): ${error.message}`);
+        pollErrors.push(`${client.userEmail}: ${error.message}`);
       }
-
-      this.status.lastPollAt = new Date().toISOString();
-      this.status.lastPollResult = `${processed} verarbeitet, ${errors} Fehler`;
-      console.log(`📬 Poll abgeschlossen: ${processed} verarbeitet, ${errors} Fehler`);
-    } catch (error: any) {
-      console.error(`📬 Poll-Fehler: ${error.message}`);
-      this.status.lastPollAt = new Date().toISOString();
-      this.status.lastPollResult = `Fehler: ${error.message}`;
-    } finally {
-      this.isPolling = false;
     }
+
+    this.status.lastPollAt = new Date().toISOString();
+    this.status.lastPollResult = pollErrors.length > 0
+      ? `${processed} verarbeitet, ${errors} Fehler, Poll-Fehler: ${pollErrors.join(' | ')}`
+      : processed + errors === 0 ? 'Keine neuen E-Mails' : `${processed} verarbeitet, ${errors} Fehler`;
+    if (processed + errors > 0) {
+      console.log(`📬 Poll abgeschlossen: ${processed} verarbeitet, ${errors} Fehler`);
+    }
+    this.isPolling = false;
 
     return { processed, errors };
   }
 
-  private async processEmail(email: GraphEmail): Promise<void> {
+  private async processEmail(client: MicrosoftGraphClient, email: GraphEmail): Promise<void> {
     const subject = email.subject || '(kein Betreff)';
     const fromAddress = email.from?.emailAddress?.address || '';
     const fromName = email.from?.emailAddress?.name || '';
@@ -222,7 +228,7 @@ export class EmailPoller {
       .filter(c => c !== this.config.triggerCategory)
       .concat(this.config.processedCategory);
 
-    await this.graphClient.updateEmailCategories(email.id, newCategories);
+    await client.updateEmailCategories(email.id, newCategories);
     console.log(`   ✅ Kategorie → "${this.config.processedCategory}"`);
   }
 }

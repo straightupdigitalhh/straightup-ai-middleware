@@ -62,21 +62,29 @@ gruppiert nach Mitarbeiter → Projekt, 0-Stunden-Tage zuerst.
 Die Middleware nutzt eine Entra-App-Registrierung mit **Application Permissions**
 (App-only, Client-Credentials – kein Nutzer-Login). Zwei Dinge sollte man wissen:
 
-1. **Application Permissions gelten tenant-weit.** `Mail.ReadWrite` (und künftig
-   `Mail.Send`) erlauben der App standardmäßig Zugriff auf **alle Postfächer der
-   Organisation**, nicht nur auf `MS_USER_EMAIL`. Der Code der Middleware greift zwar
-   nur auf dieses eine Postfach zu – aber das erzwingt erst eine **Exchange
-   Application Access Policy** (Exchange Online PowerShell, einmalig):
+1. **Application Permissions gelten tenant-weit.** `Mail.ReadWrite` und `Mail.Send`
+   erlauben der App standardmäßig Zugriff auf **alle Postfächer der Organisation**.
+   Gebraucht werden aber nur die Postfächer, in denen kategorisiert wird
+   (`MS_MAILBOXES`, z. B. Jan + Gabi) plus ggf. der Absender (`MS_SENDER_EMAIL`).
+   Genau darauf schränkt eine **Exchange Application Access Policy** ein
+   (Exchange Online PowerShell, einmalig) – die Policy zeigt auf eine
+   mail-aktivierte Sicherheitsgruppe, deren Mitglieder die erlaubten
+   Postfächer sind:
    ```powershell
    Connect-ExchangeOnline
-   # Mail-aktivierte Sicherheitsgruppe anlegen, nur das Middleware-Postfach als Mitglied,
-   # dann die App darauf einschränken:
+   # 1. Mail-aktivierte Sicherheitsgruppe mit den erlaubten Postfächern:
+   New-DistributionGroup -Name "middleware-postfaecher" -Type Security `
+     -Members jan@straightup-digital.de, gabi@straightup-digital.de
+   # 2. App auf diese Gruppe einschränken:
    New-ApplicationAccessPolicy -AppId <client-id> `
-     -PolicyScopeGroupId <gruppe@straightup-digital.de> `
-     -AccessRight RestrictAccess -Description "Middleware nur System-Postfach"
-   # Prüfen (sollte für fremde Postfächer "Denied" liefern):
+     -PolicyScopeGroupId middleware-postfaecher@straightup-digital.de `
+     -AccessRight RestrictAccess -Description "Middleware nur Jan+Gabi"
+   # 3. Prüfen: erlaubtes Postfach → Granted, fremdes → Denied
    Test-ApplicationAccessPolicy -AppId <client-id> -Identity jan@straightup-digital.de
+   Test-ApplicationAccessPolicy -AppId <client-id> -Identity info@straightup-digital.de
    ```
+   Neue Postfächer später freischalten = einfach zur Gruppe hinzufügen
+   (Policy greift nach bis zu ~30 Min).
 2. **Client-Secret pflegen.** Secrets laufen ab (Standard 6–24 Monate) – Ablaufdatum
    in Entra prüfen, sonst stirbt Polling/Versand still. Bei Verdacht auf Weitergabe
    (z. B. jemals in einem Chat/Transkript gelandet) in Entra rotieren und die

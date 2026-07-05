@@ -13,6 +13,12 @@ services:
       - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_NAME=${ADMIN_NAME:-}
       - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:-}
+      - MS_TENANT_ID=${MS_TENANT_ID:-}
+      - MS_CLIENT_ID=${MS_CLIENT_ID:-}
+      - MS_CLIENT_SECRET=${MS_CLIENT_SECRET:-}
+      - MS_MAILBOXES=${MS_MAILBOXES:-}
+      - MS_USER_EMAIL=${MS_USER_EMAIL:-}
+      - MS_SENDER_EMAIL=${MS_SENDER_EMAIL:-}
     volumes:
       # Ownership regelt der Entrypoint selbst (chown auf uid 1000, dann su-exec)
       - ./data:/app/data

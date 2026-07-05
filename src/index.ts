@@ -82,17 +82,26 @@ const feedbackKeyStore = new FeedbackKeyStore(join(DATA_DIR, 'feedback-keys.json
 const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
 
 // ─── Microsoft Graph (E-Mail-Polling + Mail-Versand) ─────────────
+// MS_MAILBOXES: kommagetrennte Liste der Postfächer, in denen die
+// Kategorie "→ awork" beobachtet wird (z. B. Jan + Gabi).
+// MS_USER_EMAIL bleibt als Alt-Konfiguration für ein Postfach gültig.
+// MS_SENDER_EMAIL: Absender der Automationen (Default: erstes Postfach).
 
-const { MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL } = process.env;
-const graphClient = (MS_TENANT_ID && MS_CLIENT_ID && MS_CLIENT_SECRET && MS_USER_EMAIL)
-  ? new MicrosoftGraphClient(MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL)
+const { MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL, MS_MAILBOXES, MS_SENDER_EMAIL } = process.env;
+const pollMailboxes = (MS_MAILBOXES || MS_USER_EMAIL || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const graphClients = (MS_TENANT_ID && MS_CLIENT_ID && MS_CLIENT_SECRET)
+  ? pollMailboxes.map(mailbox => new MicrosoftGraphClient(MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, mailbox))
+  : [];
+const mailer = graphClients.length > 0
+  ? (MS_SENDER_EMAIL ? graphClients[0].forMailbox(MS_SENDER_EMAIL) : graphClients[0])
   : null;
 
 // ─── Zeiterfassungs-Automationen ─────────────────────────────────
 // Starten deaktiviert; Aktivierung + Settings (digestRecipients etc.)
 // über PATCH /api/automations/:id bzw. das Hub-Frontend.
 
-for (const def of createTimetrackingAutomations({ awork: aworkClient, mailer: graphClient })) {
+for (const def of createTimetrackingAutomations({ awork: aworkClient, mailer })) {
   scheduler.register(def);
 }
 
@@ -205,8 +214,8 @@ app.listen(PORT, () => {
   scheduler.start();
 
   // E-Mail-Polling starten (nur wenn MS_* Variablen gesetzt sind)
-  if (graphClient) {
-    const poller = new EmailPoller(graphClient, {
+  if (graphClients.length > 0) {
+    const poller = new EmailPoller(graphClients, {
       pollInterval: parseInt(process.env.MS_POLL_INTERVAL || '180000', 10),
       triggerCategory: process.env.MS_TRIGGER_CATEGORY || '→ awork',
       processedCategory: '✅ verarbeitet',
@@ -214,7 +223,7 @@ app.listen(PORT, () => {
     setPollerInstance(poller);
     poller.start();
   } else {
-    console.log('📭 E-Mail-Polling deaktiviert (MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET oder MS_USER_EMAIL nicht gesetzt)');
+    console.log('📭 E-Mail-Polling deaktiviert (MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET oder MS_MAILBOXES/MS_USER_EMAIL nicht gesetzt)');
   }
 });
 
