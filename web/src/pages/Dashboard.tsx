@@ -54,7 +54,7 @@ export default function DashboardPage() {
           <h3 className="font-heading font-semibold mb-1">Automationen</h3>
           <p className="text-sm text-neutral-500">Zeiterfassungs-Mails & Co. verwalten, Läufe einsehen</p>
         </Link>
-        <a href="/" className="card hover:border-brand-green transition">
+        <a href="/wissenssystem" className="card hover:border-brand-green transition">
           <h3 className="font-heading font-semibold mb-1">Wissenssystem ↗</h3>
           <p className="text-sm text-neutral-500">Transkripte und E-Mails an awork senden</p>
         </a>

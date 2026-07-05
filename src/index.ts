@@ -179,7 +179,10 @@ if (existsSync(join(HUB_DIST, 'index.html'))) {
 
 // ─── Routes ──────────────────────────────────────────────────────
 
-app.use(uiRouter);          // GET / (Web-Formular, öffentlich)
+// Haupt-URL führt ins Hub; das alte Formular lebt unter /wissenssystem weiter
+app.get('/', (_req, res) => res.redirect('/app/'));
+
+app.use(uiRouter);          // GET /wissenssystem (Web-Formular, öffentlich)
 app.use(feedbackAdminUiRouter); // GET /feedback-admin (Verbindungen verwalten, öffentlich)
 app.use(healthRouter);      // GET /health (öffentlich)
 app.use(lookupRouter);      // GET /api/customers, /api/projects (auth)
