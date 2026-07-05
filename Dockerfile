@@ -1,3 +1,13 @@
+# ─── Stage 1: Hub-Frontend bauen ─────────────────────────────────
+FROM node:22-alpine AS webbuild
+
+WORKDIR /web
+COPY web/package.json web/package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+COPY web/ ./
+RUN npm run build
+
+# ─── Stage 2: Middleware ─────────────────────────────────────────
 FROM node:22-alpine
 
 WORKDIR /app
@@ -13,6 +23,9 @@ RUN npm install typescript --save-dev && npx tsc && npm remove typescript
 
 # Cleanup
 RUN rm -rf src/ tsconfig.json
+
+# Hub-Frontend aus Stage 1
+COPY --from=webbuild /web/dist ./web/dist
 
 # Nicht als root laufen: der Entrypoint startet als root, gibt dem
 # node-User das data-Volume (chown) und wechselt dann per su-exec zu ihm.
