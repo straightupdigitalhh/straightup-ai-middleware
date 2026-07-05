@@ -20,6 +20,7 @@ import { UserStore } from './core/users.js';
 import { SessionStore } from './core/sessions.js';
 import { Scheduler } from './core/scheduler.js';
 import { createAuthRouter } from './routes/auth.js';
+import { createTimetrackingAutomations } from './services/timetracking.js';
 import { createUsersAdminRouter } from './routes/users-admin.js';
 import { createAutomationsRouter } from './routes/automations.js';
 
@@ -79,6 +80,21 @@ scheduler.register({
 
 const feedbackKeyStore = new FeedbackKeyStore(join(DATA_DIR, 'feedback-keys.json'));
 const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
+
+// ─── Microsoft Graph (E-Mail-Polling + Mail-Versand) ─────────────
+
+const { MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL } = process.env;
+const graphClient = (MS_TENANT_ID && MS_CLIENT_ID && MS_CLIENT_SECRET && MS_USER_EMAIL)
+  ? new MicrosoftGraphClient(MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL)
+  : null;
+
+// ─── Zeiterfassungs-Automationen ─────────────────────────────────
+// Starten deaktiviert; Aktivierung + Settings (digestRecipients etc.)
+// über PATCH /api/automations/:id bzw. das Hub-Frontend.
+
+for (const def of createTimetrackingAutomations({ awork: aworkClient, mailer: graphClient })) {
+  scheduler.register(def);
+}
 
 // ─── Express App ─────────────────────────────────────────────────
 
@@ -189,9 +205,7 @@ app.listen(PORT, () => {
   scheduler.start();
 
   // E-Mail-Polling starten (nur wenn MS_* Variablen gesetzt sind)
-  const { MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL } = process.env;
-  if (MS_TENANT_ID && MS_CLIENT_ID && MS_CLIENT_SECRET && MS_USER_EMAIL) {
-    const graphClient = new MicrosoftGraphClient(MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL);
+  if (graphClient) {
     const poller = new EmailPoller(graphClient, {
       pollInterval: parseInt(process.env.MS_POLL_INTERVAL || '180000', 10),
       triggerCategory: process.env.MS_TRIGGER_CATEGORY || '→ awork',

@@ -17,6 +17,16 @@ export function createAutomationsRouter({ scheduler }: Deps): Router {
     res.json(scheduler.status());
   });
 
+  // Detail inkl. Settings (kann Empfänger-Adressen enthalten → nur Admins)
+  router.get('/api/automations/:id', requireAdmin, (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    if (!scheduler.has(id)) {
+      res.status(404).json({ error: 'not_found', message: 'Automation unbekannt' });
+      return;
+    }
+    res.json({ ...scheduler.statusOf(id), settings: scheduler.getSettings(id) });
+  });
+
   router.get('/api/automations/:id/runs', (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!scheduler.has(id)) {
@@ -47,7 +57,7 @@ export function createAutomationsRouter({ scheduler }: Deps): Router {
       res.status(404).json({ error: 'not_found', message: 'Automation unbekannt' });
       return;
     }
-    const { enabled, cron } = req.body ?? {};
+    const { enabled, cron, settings } = req.body ?? {};
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       res.status(400).json({ error: 'validation', message: 'enabled muss boolean sein' });
       return;
@@ -56,8 +66,13 @@ export function createAutomationsRouter({ scheduler }: Deps): Router {
       res.status(400).json({ error: 'validation', message: 'cron muss String oder null sein' });
       return;
     }
+    if (settings !== undefined && (typeof settings !== 'object' || settings === null || Array.isArray(settings))) {
+      res.status(400).json({ error: 'validation', message: 'settings muss ein Objekt sein' });
+      return;
+    }
     try {
-      res.json(scheduler.setConfig(id, { enabled, cron }));
+      if (settings !== undefined) scheduler.setSettings(id, settings);
+      res.json({ ...scheduler.setConfig(id, { enabled, cron }), settings: scheduler.getSettings(id) });
     } catch (e: any) {
       res.status(400).json({ error: 'validation', message: e.message });
     }

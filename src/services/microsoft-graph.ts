@@ -127,6 +127,35 @@ export class MicrosoftGraphClient {
   }
 
   /**
+   * Versendet eine E-Mail über das konfigurierte Postfach.
+   * Benötigt die Application Permission "Mail.Send" (+ Admin Consent).
+   */
+  async sendMail(to: string[], subject: string, htmlBody: string): Promise<void> {
+    const token = await this.getAccessToken();
+    const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(this.userEmail)}/sendMail`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: 'HTML', content: htmlBody },
+          toRecipients: to.map(address => ({ emailAddress: { address } })),
+        },
+        saveToSentItems: false,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Graph sendMail ${res.status}: ${await res.text()}`);
+    }
+  }
+
+  /**
    * Aktualisiert die Kategorien einer E-Mail (z.B. "→ awork" → "✅ verarbeitet").
    */
   async updateEmailCategories(messageId: string, categories: string[]): Promise<void> {
