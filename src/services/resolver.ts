@@ -1,4 +1,5 @@
 import { AworkClient, AworkProject, AworkDocument, AworkTaskList } from './awork.js';
+import { UserFacingError } from './errors.js';
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -65,7 +66,7 @@ export class AworkResolver {
       const target = projectName
         ? `"${customerName} – ${projectName}"`
         : `"🏢 ${customerName} – Allgemein"`;
-      throw new Error(`Projekt nicht gefunden: ${target}`);
+      throw new UserFacingError(`Projekt nicht gefunden: ${target}`);
     }
 
     // Strukturdaten auflösen

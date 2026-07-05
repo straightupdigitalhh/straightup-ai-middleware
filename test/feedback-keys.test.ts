@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { FeedbackKeyStore, domainAllowed } from '../src/services/feedback-keys.js';
@@ -23,6 +23,7 @@ describe('FeedbackKeyStore', () => {
       defaultAssigneeId: 'user-1',
     });
     expect(rec.key).toMatch(/^fbk_[A-Za-z0-9_-]{32}$/);
+    expect(rec.id).toMatch(/^[0-9a-f]{16}$/);
     expect(rec.label).toBe('Kunde XY');
     expect(rec.revokedAt).toBeNull();
     expect(rec.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
@@ -48,6 +49,33 @@ describe('FeedbackKeyStore', () => {
 
   it('revoke auf unbekannten Key liefert false', () => {
     expect(store.revoke('fbk_gibtsnicht')).toBe(false);
+  });
+
+  it('revokeById widerruft über die id', () => {
+    const rec = store.create({
+      label: 'A', domains: ['a.de'], projectId: 'p', taskListId: 'l', type: 'internal',
+    });
+    expect(store.revokeById(rec.id)).toBe(true);
+    expect(store.findActive(rec.key)).toBeUndefined();
+    expect(store.revokeById(rec.id)).toBe(false);
+  });
+
+  it('Bestandsdaten ohne id bekommen beim Laden eine id (Backfill)', () => {
+    const rec = store.create({
+      label: 'A', domains: ['a.de'], projectId: 'p', taskListId: 'l', type: 'internal',
+    });
+    // Alte Datei simulieren: id-Feld entfernen
+    const raw = JSON.parse(readFileSync(storePath, 'utf-8'));
+    delete raw[0].id;
+    writeFileSync(storePath, JSON.stringify(raw), 'utf-8');
+
+    const reloaded = new FeedbackKeyStore(storePath);
+    const migrated = reloaded.list()[0];
+    expect(migrated.id).toMatch(/^[0-9a-f]{16}$/);
+    expect(migrated.key).toBe(rec.key);
+    // Backfill wird persistiert
+    const persisted = JSON.parse(readFileSync(storePath, 'utf-8'));
+    expect(persisted[0].id).toBe(migrated.id);
   });
 
   it('defaultAssigneeId ist null wenn nicht angegeben', () => {

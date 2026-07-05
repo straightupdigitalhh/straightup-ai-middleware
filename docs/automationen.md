@@ -1,0 +1,116 @@
+# Automationen
+
+Automationen sind im Code definiert (`src/services/timetracking.ts`, Registrierung in
+`src/index.ts`); an/aus, Zeitplan und Settings liegen in der SQLite-DB und werden über
+die API (bzw. künftig das Hub-Frontend) gesteuert. Jeder Lauf landet mit Status und Log
+in der Run-Historie.
+
+## API (Auth: Session-Cookie oder X-API-Key; Steuern nur Admins)
+
+```bash
+GET    /api/automations                 # Liste mit Status + nächster Lauf
+GET    /api/automations/:id             # Detail inkl. Settings (Admin)
+GET    /api/automations/:id/runs        # Run-Historie
+POST   /api/automations/:id/run         # Sofort ausführen (202 + runId)
+PATCH  /api/automations/:id             # { enabled, cron, settings }
+```
+
+## Zeiterfassungs-Mails (timetracking-personal / timetracking-digest)
+
+**Was passiert:** An Werktagen um 08:55 (Mo–Fr, Feiertage Hamburg werden übersprungen)
+bekommt jede/r Mitarbeiter/in die eigenen awork-Zeiten des **vorherigen Werktags**
+(Montag → Freitag), gruppiert nach Projekt – auch und gerade bei 0 Stunden, mit Bitte
+um Nachtrag. Der Digest geht zeitgleich an die konfigurierten Empfänger: alle Zeiten,
+gruppiert nach Mitarbeiter → Projekt, 0-Stunden-Tage zuerst.
+
+### Einmalige Einrichtung
+
+1. **Azure AD:** Der App-Registrierung (die schon fürs E-Mail-Polling existiert) die
+   Application Permission **`Mail.Send`** geben + Admin Consent. Versendet wird über
+   das Postfach aus `MS_USER_EMAIL`.
+2. **awork-Anbindung prüfen** (versendet nichts):
+   ```bash
+   npx tsx scripts/timetracking-dry-run.ts              # vorheriger Werktag
+   npx tsx scripts/timetracking-dry-run.ts 2026-07-03   # bestimmter Tag
+   ```
+   Zeigt pro Nutzer Zeiten + gefundene E-Mail-Adresse und die gerenderten Mails.
+3. **Settings setzen und erst im Dry-Run aktivieren:**
+   ```bash
+   curl -X PATCH https://<host>/api/automations/timetracking-digest \
+     -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+     -d '{"enabled":true,"settings":{"digestRecipients":["jan@straightup-digital.de","gabi@straightup-digital.de"],"dryRun":true}}'
+
+   curl -X PATCH https://<host>/api/automations/timetracking-personal \
+     -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+     -d '{"enabled":true,"settings":{"dryRun":true}}'
+   ```
+   Nach ein paar Tagen Run-Logs prüfen (`GET /api/automations/:id/runs`), dann
+   `"dryRun":false` setzen → ab da gehen echte Mails raus.
+
+### Settings-Referenz
+
+| Feld | Automation | Bedeutung |
+|------|-----------|-----------|
+| `digestRecipients` | digest | Empfänger-Liste (Pflicht), z. B. Jan + Gabi |
+| `userEmails` | personal | Overrides `{ "<awork-user-id>": "mail@…" }`, falls awork keine E-Mail kennt |
+| `excludeUserIds` | beide | awork-User ohne Mails/Digest-Zeile (Freelancer, API-User) |
+| `targetHoursPerDay` | personal | Soll für den Lücken-Hinweis (Default 8, 0 = aus) |
+| `dryRun` | beide | `true`: nur ins Run-Log schreiben, nichts versenden |
+
+## Sicherheit der Graph-Anbindung (Entra/Azure)
+
+Die Middleware nutzt eine Entra-App-Registrierung mit **Application Permissions**
+(App-only, Client-Credentials – kein Nutzer-Login). Zwei Dinge sollte man wissen:
+
+1. **Application Permissions gelten tenant-weit.** `Mail.ReadWrite` und `Mail.Send`
+   erlauben der App standardmäßig Zugriff auf **alle Postfächer der Organisation**.
+   Gebraucht werden aber nur die Postfächer, in denen kategorisiert wird
+   (`MS_MAILBOXES`, z. B. Jan + Gabi) plus ggf. der Absender (`MS_SENDER_EMAIL`).
+   Genau darauf schränkt eine **Exchange Application Access Policy** ein
+   (Exchange Online PowerShell, einmalig) – die Policy zeigt auf eine
+   mail-aktivierte Sicherheitsgruppe, deren Mitglieder die erlaubten
+   Postfächer sind:
+   Die **Gruppe** lässt sich bequem im Browser anlegen: Exchange Admin Center
+   (admin.exchange.microsoft.com) → Empfänger → Gruppen → „Gruppe hinzufügen" →
+   Typ **„E-Mail-aktivierte Sicherheit"** (nur dieser Typ funktioniert) →
+   Name `middleware-postfaecher`, Mitglieder = die erlaubten Postfächer.
+   **Wichtig:** Alle in `MS_MAILBOXES`/`MS_USER_EMAIL`/`MS_SENDER_EMAIL`
+   konfigurierten Postfächer müssen Mitglied sein, sonst bricht Polling/Versand ab.
+
+   Die **Policy** selbst gibt es nur per PowerShell (macOS: `brew install --cask
+   powershell`, dann `pwsh`):
+   ```powershell
+   Install-Module ExchangeOnlineManagement -Scope CurrentUser   # einmalig
+   Connect-ExchangeOnline -UserPrincipalName <admin@straightup-digital.de>
+
+   # App einschränken (Client-ID: Entra → App → Übersicht → "Anwendungs-ID (Client)"):
+   New-ApplicationAccessPolicy -AppId <client-id> `
+     -PolicyScopeGroupId middleware-postfaecher@straightup-digital.de `
+     -AccessRight RestrictAccess -Description "straightup Middleware: nur freigegebene Postfaecher"
+
+   # Prüfen: erlaubtes Postfach → Granted, fremdes → Denied
+   Test-ApplicationAccessPolicy -AppId <client-id> -Identity jan@straightup-digital.de
+   Test-ApplicationAccessPolicy -AppId <client-id> -Identity info@straightup-digital.de
+   ```
+   Die Policy greift nach bis zu ~30 Minuten. Danach Middleware-Log/`/health`
+   prüfen: Das Polling muss weiterlaufen (`ErrorAccessDenied` = Postfach fehlt
+   in der Gruppe). Neue Postfächer später freischalten = einfach zur Gruppe
+   hinzufügen, kein PowerShell mehr nötig.
+2. **Client-Secret pflegen.** Secrets laufen ab (Standard 6–24 Monate) – Ablaufdatum
+   in Entra prüfen, sonst stirbt Polling/Versand still. Bei Verdacht auf Weitergabe
+   (z. B. jemals in einem Chat/Transkript gelandet) in Entra rotieren und die
+   Server-Env aktualisieren. Langfristig ist ein Zertifikat statt Secret die
+   robustere Variante.
+
+Welche Berechtigungen tatsächlich erteilt sind, zeigt (ohne etwas zu ändern):
+```bash
+npx tsx scripts/graph-permissions-check.ts
+```
+
+### Hinweise
+
+- Der Cron `55 8 * * 1-5` läuft in Europe/Berlin (Sommer-/Winterzeit inklusive).
+- Läuft die Middleware um 08:55 gerade nicht (Deploy), gibt es keinen automatischen
+  Nachhol-Lauf – bei Bedarf manuell per `POST /api/automations/:id/run` triggern.
+- Der awork-`timeentries`-Filter (`StartDateLocal ge datetime'…'`) ist gegen die
+  API-Doku gebaut; der Dry-Run in Schritt 2 verifiziert ihn gegen die echte API.

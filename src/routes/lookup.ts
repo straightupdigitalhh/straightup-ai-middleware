@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { AworkClient } from '../services/awork.js';
 import { AworkResolver } from '../services/resolver.js';
+import { clientErrorMessage } from '../services/errors.js';
 
 const router = Router();
 
@@ -15,7 +16,8 @@ router.get('/api/customers', async (_req: Request, res: Response) => {
     const customers = await resolver.extractUniqueCustomerNames();
     res.json({ customers });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error('❌ /api/customers fehlgeschlagen:', error);
+    res.status(500).json({ error: clientErrorMessage(error) });
   }
 });
 
@@ -41,7 +43,8 @@ router.get('/api/projects', async (req: Request, res: Response) => {
 
     res.json({ projects: matching });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error('❌ /api/projects fehlgeschlagen:', error);
+    res.status(500).json({ error: clientErrorMessage(error) });
   }
 });
 

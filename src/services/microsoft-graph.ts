@@ -48,8 +48,14 @@ export class MicrosoftGraphClient {
     private tenantId: string,
     private clientId: string,
     private clientSecret: string,
-    private userEmail: string
+    /** Postfach, auf das dieser Client zugreift (lesen + senden). */
+    public readonly userEmail: string
   ) {}
+
+  /** Client für ein anderes Postfach mit denselben App-Zugangsdaten. */
+  forMailbox(userEmail: string): MicrosoftGraphClient {
+    return new MicrosoftGraphClient(this.tenantId, this.clientId, this.clientSecret, userEmail);
+  }
 
   private async getAccessToken(): Promise<string> {
     // Token noch gültig? (5 Min Puffer)
@@ -124,6 +130,35 @@ export class MicrosoftGraphClient {
 
     const data = await res.json() as { value: GraphEmail[] };
     return data.value || [];
+  }
+
+  /**
+   * Versendet eine E-Mail über das konfigurierte Postfach.
+   * Benötigt die Application Permission "Mail.Send" (+ Admin Consent).
+   */
+  async sendMail(to: string[], subject: string, htmlBody: string): Promise<void> {
+    const token = await this.getAccessToken();
+    const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(this.userEmail)}/sendMail`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: 'HTML', content: htmlBody },
+          toRecipients: to.map(address => ({ emailAddress: { address } })),
+        },
+        saveToSentItems: false,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Graph sendMail ${res.status}: ${await res.text()}`);
+    }
   }
 
   /**

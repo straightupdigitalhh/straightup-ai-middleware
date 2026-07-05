@@ -13,9 +13,11 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "croner": "^10.0.1",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
     "form-data": "^4.0.1",
+    "helmet": "^8.2.0",
     "node-fetch": "^2.7.0"
   },
   "devDependencies": {

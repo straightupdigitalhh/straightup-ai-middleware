@@ -7,6 +7,7 @@ import {
   renderDecisionLogEntry,
   renderMeetingIndexEntry,
 } from '../templates/index.js';
+import { clientErrorMessage } from '../services/errors.js';
 
 const router = Router();
 
@@ -146,7 +147,7 @@ router.post('/api/transcript', async (req: Request, res: Response) => {
     console.error('❌ Fehler bei Transkript-Verarbeitung:', error);
     res.status(500).json({
       error: 'Transkript-Verarbeitung fehlgeschlagen',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });

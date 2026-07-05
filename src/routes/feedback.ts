@@ -6,11 +6,14 @@ import {
   validateTicketPayload, buildTicketDescriptionHtml, taskNameFrom,
   decodeScreenshot, checkRateLimit,
 } from '../services/feedback-ticket.js';
+import { FixedWindowLimiter } from '../services/rate-limit.js';
 
 interface Deps {
   store: FeedbackKeyStore;
   awork: Pick<AworkClient, 'getProject' | 'getProjectMembers' | 'createTask' | 'setTaskAssignees' | 'uploadTaskFile'>;
   workspaceUrl: string;
+  /** Brute-Force-Bremse für ungültige Keys (injizierbar für Tests). */
+  authFailureLimiter?: FixedWindowLimiter;
 }
 
 /**
@@ -18,7 +21,10 @@ interface Deps {
  * Auth über projektspezifischen X-Feedback-Key (NICHT der Master-API-Key).
  * Wird auf /feedback gemountet – VOR den globalen Body-Parsern (20-MB-Limit).
  */
-export function createFeedbackRouter({ store, awork, workspaceUrl }: Deps): Router {
+export function createFeedbackRouter({
+  store, awork, workspaceUrl,
+  authFailureLimiter = new FixedWindowLimiter(30, 15 * 60 * 1000),
+}: Deps): Router {
   const router = Router();
 
   // ─── CORS (Auth läuft über expliziten Header, nicht Cookies) ──
@@ -33,11 +39,17 @@ export function createFeedbackRouter({ store, awork, workspaceUrl }: Deps): Rout
     res.status(204).end();
   });
 
-  // ─── Key-Auth ──────────────────────────────────────────────────
+  // ─── Key-Auth (mit Brute-Force-Bremse pro IP) ──────────────────
   router.use((req: Request, res: Response, next: NextFunction) => {
+    const ip = req.ip || 'unbekannt';
+    if (authFailureLimiter.blocked(ip)) {
+      res.status(429).json({ error: 'rate_limited', message: 'Zu viele fehlgeschlagene Versuche, bitte später erneut' });
+      return;
+    }
     const key = req.headers['x-feedback-key'];
     const record = typeof key === 'string' ? store.findActive(key) : undefined;
     if (!record) {
+      authFailureLimiter.hit(ip);
       res.status(401).json({ error: 'invalid_key', message: 'Feedback-Key fehlt, ist ungültig oder wurde widerrufen' });
       return;
     }

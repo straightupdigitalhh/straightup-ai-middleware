@@ -40,10 +40,13 @@ Die Task-Liste „Website-Feedback" wird im awork-Projekt automatisch angelegt.
 
 ```bash
 curl -H "X-API-Key: $API_KEY" https://<middleware-host>/api/feedback-keys
-curl -X DELETE -H "X-API-Key: $API_KEY" https://<middleware-host>/api/feedback-keys/fbk_…
+curl -X DELETE -H "X-API-Key: $API_KEY" https://<middleware-host>/api/feedback-keys/<id>
 ```
 
-Unbekannter oder bereits widerrufener Key → `404 { error: "not_found" }`.
+Die Liste enthält **keine Klartext-Keys** mehr, nur `id` + `keyPrefix` – der
+volle Key wird ausschließlich einmalig in der Antwort der Anlage ausgegeben.
+Widerruf läuft über die `id` (der Klartext-Key wird aus Kompatibilität weiter
+akzeptiert). Unbekannte id / bereits widerrufen → `404 { error: "not_found" }`.
 
 ## Extension-Endpoints (Auth: X-Feedback-Key)
 

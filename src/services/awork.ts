@@ -41,6 +41,33 @@ export interface AworkProjectMember {
   isExternal?: boolean;
 }
 
+export interface AworkUser {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  isDeactivated?: boolean;
+  isArchived?: boolean;
+  userContactInfos?: { type: string; subType?: string; value: string }[];
+}
+
+export interface AworkTimeEntry {
+  id: string;
+  userId: string;
+  /** Dauer in Sekunden */
+  duration: number;
+  note?: string | null;
+  startDateLocal?: string;
+  project?: { id: string; name: string } | null;
+  task?: { id: string; name: string } | null;
+}
+
+/** E-Mail eines awork-Users aus den Kontaktinfos (bevorzugt "work"). */
+export function aworkUserEmail(user: AworkUser): string | null {
+  const emails = (user.userContactInfos || []).filter(c => c.type === 'email' && c.value);
+  if (emails.length === 0) return null;
+  return (emails.find(c => c.subType === 'work') || emails[0]).value;
+}
+
 // ─── Client ──────────────────────────────────────────────────────
 
 export class AworkClient {
@@ -109,6 +136,21 @@ export class AworkClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     });
+  }
+
+  // ─── Users & Zeiterfassung ───────────────────────────────────
+
+  async getUsers(): Promise<AworkUser[]> {
+    return this.request('/users?pageSize=200');
+  }
+
+  /**
+   * Alle Zeiteinträge eines Kalendertags (lokale awork-Zeit).
+   * `day` als "YYYY-MM-DD".
+   */
+  async getTimeEntriesForDay(day: string): Promise<AworkTimeEntry[]> {
+    const filter = `StartDateLocal ge datetime'${day}T00:00:00' and StartDateLocal le datetime'${day}T23:59:59'`;
+    return this.request(`/timeentries?filterby=${encodeURIComponent(filter)}&pageSize=1000`);
   }
 
   // ─── Documents ───────────────────────────────────────────────

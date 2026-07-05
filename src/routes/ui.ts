@@ -13,6 +13,7 @@ const HTML = `<!DOCTYPE html>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; }
     .container { max-width: 640px; margin: 0 auto; padding: 2rem 1rem; }
     h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: .25rem; }
+    h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; }
     .subtitle { color: #666; margin-bottom: 2rem; font-size: .9rem; }
     .card { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); margin-bottom: 1rem; }
     label { display: block; font-weight: 500; margin-bottom: .5rem; font-size: .9rem; }
@@ -24,7 +25,7 @@ const HTML = `<!DOCTYPE html>
     .btn { display: inline-block; padding: .75rem 1.5rem; background: #0066ff; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 500; cursor: pointer; width: 100%; margin-top: 1rem; }
     .btn:hover { background: #0052cc; }
     .btn:disabled { background: #ccc; cursor: not-allowed; }
-    .status { margin-top: 1rem; padding: 1rem; border-radius: 8px; display: none; font-size: .9rem; line-height: 1.5; }
+    .status { margin-top: 1rem; padding: 1rem; border-radius: 8px; display: none; font-size: .9rem; line-height: 1.5; white-space: pre-wrap; }
     .status.success { display: block; background: #e8f5e9; color: #2e7d32; }
     .status.error { display: block; background: #fbe9e7; color: #c62828; }
     .status.loading { display: block; background: #e3f2fd; color: #1565c0; }
@@ -41,23 +42,34 @@ const HTML = `<!DOCTYPE html>
     <h1>straightup Wissenssystem</h1>
     <p class="subtitle">Transkripte und E-Mails an awork senden</p>
 
+    <div class="card" id="login-card">
+      <h2>Anmelden</h2>
+      <div class="field">
+        <label for="master-key">Master-Schlüssel</label>
+        <input type="password" id="master-key" autocomplete="current-password">
+      </div>
+      <button class="btn" id="btn-login">Anmelden</button>
+      <div class="status" id="login-status"></div>
+    </div>
+
+    <div id="main-content" class="hidden">
     <div class="tabs">
-      <button class="tab active" onclick="switchTab('transcript')">Transkript</button>
-      <button class="tab" onclick="switchTab('email')">E-Mail</button>
+      <button class="tab active" data-tab="transcript">Transkript</button>
+      <button class="tab" data-tab="email">E-Mail</button>
     </div>
 
     <div class="card" id="tab-transcript">
       <div class="row">
         <div class="field">
           <label for="customer">Kunde</label>
-          <select id="customer" onchange="loadProjects()">
+          <select id="customer">
             <option value="">Wird geladen...</option>
           </select>
         </div>
         <div class="field">
           <label for="project">Projekt</label>
           <select id="project">
-            <option value="">Erst Kunde w&auml;hlen</option>
+            <option value="">Erst Kunde wählen</option>
           </select>
         </div>
       </div>
@@ -75,24 +87,24 @@ const HTML = `<!DOCTYPE html>
 
       <div class="field">
         <label for="transcript">Transkript</label>
-        <textarea id="transcript" placeholder="Transkript hier einf&uuml;gen..."></textarea>
+        <textarea id="transcript" placeholder="Transkript hier einfügen..."></textarea>
       </div>
 
-      <button class="btn" id="btn-transcript" onclick="submitTranscript()">Transkript verarbeiten</button>
+      <button class="btn" id="btn-transcript">Transkript verarbeiten</button>
     </div>
 
     <div class="card hidden" id="tab-email">
       <div class="row">
         <div class="field">
           <label for="email-customer">Kunde</label>
-          <select id="email-customer" onchange="loadProjectsEmail()">
+          <select id="email-customer">
             <option value="">Wird geladen...</option>
           </select>
         </div>
         <div class="field">
           <label for="email-project">Projekt</label>
           <select id="email-project">
-            <option value="">Erst Kunde w&auml;hlen</option>
+            <option value="">Erst Kunde wählen</option>
           </select>
         </div>
       </div>
@@ -110,62 +122,152 @@ const HTML = `<!DOCTYPE html>
 
       <div class="field">
         <label for="email-body">E-Mail-Text</label>
-        <textarea id="email-body" placeholder="E-Mail-Inhalt hier einf&uuml;gen..."></textarea>
+        <textarea id="email-body" placeholder="E-Mail-Inhalt hier einfügen..."></textarea>
       </div>
 
-      <button class="btn" id="btn-email" onclick="submitEmail()">E-Mail verarbeiten</button>
+      <button class="btn" id="btn-email">E-Mail verarbeiten</button>
     </div>
 
     <div class="status" id="status"></div>
+    </div>
   </div>
 
   <script>
-    const API_KEY = new URLSearchParams(window.location.search).get('key') || '';
+    // Gleicher Storage-Key wie /feedback-admin → einmal anmelden reicht.
+    const STORAGE_KEY = 'straightupMasterKey';
     let customers = [];
 
+    // ─── Auth-Helfer ─────────────────────────────────────────────
+
+    function getStoredKey() {
+      return sessionStorage.getItem(STORAGE_KEY) || '';
+    }
+
+    function authHeaders() {
+      return { 'X-API-Key': getStoredKey() };
+    }
+
+    function showLogin(message) {
+      document.getElementById('main-content').classList.add('hidden');
+      document.getElementById('login-card').classList.remove('hidden');
+      if (message) showStatusIn('login-status', message, 'error');
+    }
+
+    function showMainContent() {
+      document.getElementById('login-card').classList.add('hidden');
+      document.getElementById('main-content').classList.remove('hidden');
+    }
+
+    function handleUnauthorized() {
+      sessionStorage.removeItem(STORAGE_KEY);
+      showLogin('Schlüssel ungültig oder abgelaufen');
+    }
+
+    // ─── Status-Boxen ────────────────────────────────────────────
+
+    function showStatusIn(elId, msg, type) {
+      const el = document.getElementById(elId);
+      el.className = 'status ' + type;
+      el.textContent = msg;
+    }
+
+    function showStatus(msg, type) {
+      showStatusIn('status', msg, type);
+    }
+
+    // ─── Select-Befüllung (XSS-sicher via textContent) ───────────
+
+    function setOptions(selectId, placeholderText, items) {
+      const el = document.getElementById(selectId);
+      el.innerHTML = '';
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = placeholderText;
+      el.appendChild(placeholder);
+      for (const item of items) {
+        const option = document.createElement('option');
+        option.value = item;
+        option.textContent = item;
+        el.appendChild(option);
+      }
+    }
+
+    // ─── Login ───────────────────────────────────────────────────
+
+    async function attemptLogin(key) {
+      try {
+        const res = await fetch('/api/customers', { headers: { 'X-API-Key': key } });
+        if (res.status === 200) {
+          const data = await res.json();
+          customers = data.customers || [];
+          sessionStorage.setItem(STORAGE_KEY, key);
+          showMainContent();
+          setOptions('customer', 'Kunde wählen...', customers);
+          setOptions('email-customer', 'Kunde wählen...', customers);
+          return true;
+        }
+        if (res.status === 401) {
+          showStatusIn('login-status', 'Schlüssel ungültig', 'error');
+        } else {
+          showStatusIn('login-status', 'Fehler ' + res.status, 'error');
+        }
+        return false;
+      } catch (e) {
+        showStatusIn('login-status', 'Verbindung zum Server fehlgeschlagen: ' + e.message, 'error');
+        return false;
+      }
+    }
+
+    document.getElementById('btn-login').addEventListener('click', async () => {
+      const key = document.getElementById('master-key').value;
+      if (!key) { showStatusIn('login-status', 'Bitte Master-Schlüssel eingeben.', 'error'); return; }
+      const btn = document.getElementById('btn-login');
+      btn.disabled = true;
+      await attemptLogin(key);
+      btn.disabled = false;
+    });
+
+    document.getElementById('master-key').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('btn-login').click();
+    });
+
+    // ─── Tabs ────────────────────────────────────────────────────
+
     function switchTab(tab) {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelector('.tab[onclick*="' + tab + '"]').classList.add('active');
+      document.querySelectorAll('.tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tab);
+      });
       document.getElementById('tab-transcript').classList.toggle('hidden', tab !== 'transcript');
       document.getElementById('tab-email').classList.toggle('hidden', tab !== 'email');
       document.getElementById('status').className = 'status';
     }
 
-    async function loadCustomers() {
-      try {
-        const res = await fetch('/api/customers', { headers: { 'X-API-Key': API_KEY } });
-        const data = await res.json();
-        customers = data.customers || [];
+    document.querySelectorAll('.tab').forEach(t => {
+      t.addEventListener('click', () => switchTab(t.dataset.tab));
+    });
 
-        for (const sel of ['customer', 'email-customer']) {
-          const el = document.getElementById(sel);
-          el.innerHTML = '<option value="">Kunde w\\u00e4hlen...</option>' +
-            customers.map(c => '<option value="' + c + '">' + c + '</option>').join('');
-        }
-      } catch (e) {
-        showStatus('Fehler beim Laden der Kunden: ' + e.message, 'error');
-      }
-    }
+    // ─── Projekte laden ──────────────────────────────────────────
 
-    async function loadProjects() { await _loadProjects('customer', 'project'); }
-    async function loadProjectsEmail() { await _loadProjects('email-customer', 'email-project'); }
-
-    async function _loadProjects(customerSel, projectSel) {
+    async function loadProjectsInto(customerSel, projectSel) {
       const customer = document.getElementById(customerSel).value;
-      const el = document.getElementById(projectSel);
-      if (!customer) { el.innerHTML = '<option value="">Erst Kunde w\\u00e4hlen</option>'; return; }
+      if (!customer) { setOptions(projectSel, 'Erst Kunde wählen', []); return; }
 
-      el.innerHTML = '<option value="">Wird geladen...</option>';
+      setOptions(projectSel, 'Wird geladen...', []);
       try {
-        const res = await fetch('/api/projects?customer=' + encodeURIComponent(customer), { headers: { 'X-API-Key': API_KEY } });
+        const res = await fetch('/api/projects?customer=' + encodeURIComponent(customer), { headers: authHeaders() });
+        if (res.status === 401) { handleUnauthorized(); return; }
         const data = await res.json();
-        const projects = data.projects || [];
-        el.innerHTML = '<option value="">(kein spezifisches Projekt)</option>' +
-          projects.map(p => '<option value="' + p.name + '">' + p.name + '</option>').join('');
+        const names = (data.projects || []).map(p => p.name);
+        setOptions(projectSel, '(kein spezifisches Projekt)', names);
       } catch (e) {
-        el.innerHTML = '<option value="">Fehler beim Laden</option>';
+        setOptions(projectSel, 'Fehler beim Laden', []);
       }
     }
+
+    document.getElementById('customer').addEventListener('change', () => loadProjectsInto('customer', 'project'));
+    document.getElementById('email-customer').addEventListener('change', () => loadProjectsInto('email-customer', 'email-project'));
+
+    // ─── Absenden ────────────────────────────────────────────────
 
     async function submitTranscript() {
       const customer = document.getElementById('customer').value;
@@ -182,7 +284,7 @@ const HTML = `<!DOCTYPE html>
       try {
         const res = await fetch('/api/transcript', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+          headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
           body: JSON.stringify({
             content,
             customerName: customer,
@@ -190,14 +292,15 @@ const HTML = `<!DOCTYPE html>
             source,
           }),
         });
+        if (res.status === 401) { handleUnauthorized(); btn.disabled = false; return; }
         const data = await res.json();
         if (data.status === 'ok') {
           const r = data.routing;
           showStatus(
-            'Transkript verarbeitet!\\n' +
-            'Titel: ' + r.title + '\\n' +
-            'Entscheidungen: ' + (r.decisionsCount || 0) + '\\n' +
-            'Action Items: ' + (r.actionItemsCount || 0) + '\\n\\n' +
+            'Transkript verarbeitet!' +
+            '\\nTitel: ' + r.title +
+            '\\nEntscheidungen: ' + (r.decisionsCount || 0) +
+            '\\nAction Items: ' + (r.actionItemsCount || 0) + '\\n\\n' +
             (data.results || []).join('\\n'),
             'success'
           );
@@ -226,7 +329,7 @@ const HTML = `<!DOCTYPE html>
       try {
         const res = await fetch('/api/email', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+          headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
           body: JSON.stringify({
             body,
             subject: subject || undefined,
@@ -235,13 +338,14 @@ const HTML = `<!DOCTYPE html>
             projectName: project || undefined,
           }),
         });
+        if (res.status === 401) { handleUnauthorized(); btn.disabled = false; return; }
         const data = await res.json();
         if (data.status === 'ok') {
           const r = data.routing;
           showStatus(
-            'E-Mail verarbeitet!\\n' +
-            'Kategorie: ' + r.emailCategory + '\\n' +
-            'Titel: ' + r.title + '\\n' +
+            'E-Mail verarbeitet!' +
+            '\\nKategorie: ' + r.emailCategory +
+            '\\nTitel: ' + r.title + '\\n' +
             (data.results || []).join('\\n'),
             'success'
           );
@@ -254,13 +358,15 @@ const HTML = `<!DOCTYPE html>
       btn.disabled = false;
     }
 
-    function showStatus(msg, type) {
-      const el = document.getElementById('status');
-      el.className = 'status ' + type;
-      el.textContent = msg;
-    }
+    document.getElementById('btn-transcript').addEventListener('click', submitTranscript);
+    document.getElementById('btn-email').addEventListener('click', submitEmail);
 
-    loadCustomers();
+    // ─── Init ────────────────────────────────────────────────────
+
+    (async function init() {
+      const storedKey = getStoredKey();
+      if (storedKey) await attemptLogin(storedKey);
+    })();
   </script>
 </body>
 </html>`;

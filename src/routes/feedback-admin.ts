@@ -59,18 +59,24 @@ export function createFeedbackAdminRouter({ store, awork }: Deps): Router {
       res.status(201).json(record);
     } catch (e: any) {
       console.error(`❌ Feedback-Key-Anlage fehlgeschlagen: ${e.message}`);
-      res.status(502).json({ error: 'awork_unreachable', message: e.message });
+      res.status(502).json({ error: 'awork_unreachable', message: 'awork antwortet nicht' });
     }
   });
 
+  // Liste OHNE Klartext-Keys: der volle Key wird nur einmal bei der Anlage
+  // ausgegeben. Verwaltung (Widerruf) läuft über die id.
   router.get('/api/feedback-keys', (_req: Request, res: Response) => {
-    res.json(store.list());
+    res.json(store.list().map(({ key, ...rest }) => ({
+      ...rest,
+      keyPrefix: `${key.slice(0, 8)}…`,
+    })));
   });
 
-  router.delete('/api/feedback-keys/:key', (req: Request, res: Response) => {
-    const key = req.params.key as string;
-    if (store.revoke(key)) {
-      console.log(`🔑 Feedback-Key widerrufen: ${key.slice(0, 12)}…`);
+  // Widerruf per id; der Klartext-Key wird aus Kompatibilität weiter akzeptiert.
+  router.delete('/api/feedback-keys/:id', (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    if (store.revokeById(id) || store.revoke(id)) {
+      console.log(`🔑 Feedback-Key widerrufen: ${id.slice(0, 12)}…`);
       res.status(204).end();
     } else {
       res.status(404).json({ error: 'not_found', message: 'Key unbekannt oder bereits widerrufen' });
@@ -89,7 +95,7 @@ export function createFeedbackAdminRouter({ store, awork }: Deps): Router {
       res.json(mapped);
     } catch (e: any) {
       console.error(`❌ Projektliste konnte nicht geladen werden: ${e.message}`);
-      res.status(502).json({ error: 'awork_unreachable', message: e.message });
+      res.status(502).json({ error: 'awork_unreachable', message: 'awork antwortet nicht' });
     }
   });
 
@@ -107,7 +113,7 @@ export function createFeedbackAdminRouter({ store, awork }: Deps): Router {
       res.json(mapped);
     } catch (e: any) {
       console.error(`❌ Projektmitglieder konnten nicht geladen werden: ${e.message}`);
-      res.status(502).json({ error: 'awork_unreachable', message: e.message });
+      res.status(502).json({ error: 'awork_unreachable', message: 'awork antwortet nicht' });
     }
   });
 

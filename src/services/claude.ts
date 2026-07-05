@@ -1,5 +1,18 @@
 import Anthropic from '@anthropic-ai/sdk';
 
+// ─── Modelle ─────────────────────────────────────────────────────
+// Per Env übersteuerbar, damit ein Modell-Generationswechsel (Retirement)
+// keine Code-Änderung braucht – nur die Variable in Mittwald anpassen.
+
+const ANALYSIS_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-5';
+const FAST_MODEL = process.env.CLAUDE_MODEL_FAST || 'claude-haiku-4-5';
+
+/** Ersten Text-Block extrahieren (Antworten können auch Thinking-Blöcke enthalten). */
+function textFrom(response: Anthropic.Message): string {
+  const block = response.content.find(b => b.type === 'text');
+  return block && block.type === 'text' ? block.text : '';
+}
+
 // ─── Types ───────────────────────────────────────────────────────
 
 export type ContentType = 'email' | 'transcript' | 'briefing' | 'general';
@@ -81,7 +94,7 @@ export async function detectCustomer(
   const anthropic = new Anthropic();
 
   const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: FAST_MODEL,
     max_tokens: 256,
     system: `Du ordnest E-Mails einem bekannten Kunden zu. Antworte AUSSCHLIESSLICH als JSON.`,
     messages: [{
@@ -103,7 +116,7 @@ Regeln:
     }],
   });
 
-  const text = response.content[0].type === 'text' ? response.content[0].text : '{}';
+  const text = textFrom(response) || '{}';
   const jsonMatch = text.match(/\{[\s\S]*\}/);
 
   try {
@@ -139,13 +152,16 @@ ${content}
 Analysiere und strukturiere diesen Inhalt gemäß den Routing-Regeln. Antworte als JSON.`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: ANALYSIS_MODEL,
     max_tokens: 4096,
+    // Reine JSON-Extraktion: Thinking aus, damit die 4096 Tokens der
+    // Antwort gehören (Sonnet 5 denkt sonst standardmäßig mit).
+    thinking: { type: 'disabled' },
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   });
 
-  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const text = textFrom(response);
 
   // JSON aus der Antwort extrahieren (falls in Codeblock)
   const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/\{[\s\S]*\}/);

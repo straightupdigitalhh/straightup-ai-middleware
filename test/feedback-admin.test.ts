@@ -80,20 +80,35 @@ describe('POST /api/feedback-keys', () => {
 });
 
 describe('GET + DELETE /api/feedback-keys', () => {
-  it('listet Keys und widerruft per DELETE', async () => {
+  it('listet Keys maskiert (kein Klartext-Key) und widerruft per id', async () => {
     const awork = { getTaskLists: vi.fn().mockResolvedValue([{ id: 'l', name: 'Website-Feedback' }]), createTaskList: vi.fn(), getProjects: vi.fn(), getProjectMembers: vi.fn() };
     const { app } = makeApp(awork);
     const created = await request(app).post('/api/feedback-keys').send(validBody);
+    // Klartext-Key nur einmalig bei der Anlage
+    expect(created.body.key).toMatch(/^fbk_/);
+    expect(created.body.id).toBeTruthy();
 
     const list = await request(app).get('/api/feedback-keys');
     expect(list.status).toBe(200);
     expect(list.body).toHaveLength(1);
+    expect(list.body[0].key).toBeUndefined();
+    expect(list.body[0].keyPrefix).toBe(created.body.key.slice(0, 8) + '…');
+    expect(list.body[0].id).toBe(created.body.id);
+
+    const del = await request(app).delete(`/api/feedback-keys/${created.body.id}`);
+    expect(del.status).toBe(204);
+
+    const delAgain = await request(app).delete(`/api/feedback-keys/${created.body.id}`);
+    expect(delAgain.status).toBe(404);
+  });
+
+  it('widerruft aus Kompatibilität auch per Klartext-Key', async () => {
+    const awork = { getTaskLists: vi.fn().mockResolvedValue([{ id: 'l', name: 'Website-Feedback' }]), createTaskList: vi.fn(), getProjects: vi.fn(), getProjectMembers: vi.fn() };
+    const { app } = makeApp(awork);
+    const created = await request(app).post('/api/feedback-keys').send(validBody);
 
     const del = await request(app).delete(`/api/feedback-keys/${created.body.key}`);
     expect(del.status).toBe(204);
-
-    const delAgain = await request(app).delete(`/api/feedback-keys/${created.body.key}`);
-    expect(delAgain.status).toBe(404);
   });
 });
 
@@ -132,7 +147,8 @@ describe('GET /api/feedback-keys/projects', () => {
     const res = await request(app).get('/api/feedback-keys/projects');
 
     expect(res.status).toBe(502);
-    expect(res.body).toEqual({ error: 'awork_unreachable', message: 'awork down' });
+    // Interna (awork-Fehlertext) dürfen nicht zum Client durchsickern
+    expect(res.body).toEqual({ error: 'awork_unreachable', message: 'awork antwortet nicht' });
   });
 });
 
@@ -196,7 +212,7 @@ describe('GET /api/feedback-keys/project-members/:projectId', () => {
     const res = await request(app).get('/api/feedback-keys/project-members/proj-1');
 
     expect(res.status).toBe(502);
-    expect(res.body).toEqual({ error: 'awork_unreachable', message: 'awork down' });
+    expect(res.body).toEqual({ error: 'awork_unreachable', message: 'awork antwortet nicht' });
   });
 });
 

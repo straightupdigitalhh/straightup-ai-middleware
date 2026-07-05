@@ -131,7 +131,8 @@ const HTML = `<!DOCTYPE html>
   </div>
 
   <script>
-    const STORAGE_KEY = 'feedbackAdminKey';
+    // Gleicher Storage-Key wie die Startseite → einmal anmelden reicht.
+    const STORAGE_KEY = 'straightupMasterKey';
     let projects = [];
     let labelManuallyEdited = false;
 
@@ -442,7 +443,7 @@ const HTML = `<!DOCTYPE html>
           const revokeBtn = document.createElement('button');
           revokeBtn.className = 'btn btn-revoke';
           revokeBtn.textContent = 'Widerrufen';
-          revokeBtn.addEventListener('click', () => revokeKey(record.key));
+          revokeBtn.addEventListener('click', () => revokeConnection(record.id));
           row.cells[4].appendChild(revokeBtn);
         }
 
@@ -450,10 +451,10 @@ const HTML = `<!DOCTYPE html>
       }
     }
 
-    async function revokeKey(key) {
+    async function revokeConnection(id) {
       clearStatus('table-status');
       try {
-        const res = await fetch('/api/feedback-keys/' + encodeURIComponent(key), {
+        const res = await fetch('/api/feedback-keys/' + encodeURIComponent(id), {
           method: 'DELETE',
           headers: authHeaders(),
         });
