@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 data/
+web/node_modules
+web/dist

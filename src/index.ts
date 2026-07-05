@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
+import { existsSync } from 'fs';
 import emailRouter from './routes/email.js';
 import transcriptRouter from './routes/transcript.js';
 import healthRouter from './routes/health.js';
@@ -157,6 +158,24 @@ app.use((req, _res, next) => {
   console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
   next();
 });
+
+// ─── Hub-Frontend (SPA unter /app) ───────────────────────────────
+// Statische Assets aus web/dist; unbekannte /app-Pfade → index.html
+// (Client-Routing). Fehlt der Build (lokale Dev ohne Frontend), gibt
+// es einen Hinweis statt eines 404-Rätsels.
+
+const HUB_DIST = join(process.cwd(), 'web', 'dist');
+if (existsSync(join(HUB_DIST, 'index.html'))) {
+  app.use('/app', express.static(HUB_DIST, { index: 'index.html', maxAge: '1h' }));
+  app.get(/^\/app(\/.*)?$/, (_req, res) => {
+    res.sendFile(join(HUB_DIST, 'index.html'));
+  });
+} else {
+  app.get(/^\/app(\/.*)?$/, (_req, res) => {
+    res.status(503).send('Hub-Frontend nicht gebaut (cd web && npm run build)');
+  });
+  console.warn('⚠️  web/dist fehlt – Hub-Frontend unter /app nicht verfügbar');
+}
 
 // ─── Routes ──────────────────────────────────────────────────────
 

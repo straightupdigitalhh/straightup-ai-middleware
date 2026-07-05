@@ -1,0 +1,34 @@
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/lexend-deca/500.css';
+@import '@fontsource/lexend-deca/600.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-neutral-50 text-brand-ink font-body antialiased;
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center gap-2 rounded-pill border border-brand-ink px-5 py-2 text-sm font-medium
+      transition hover:bg-brand-mint disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .btn-danger {
+    @apply inline-flex items-center gap-2 rounded-pill border border-brand-coral text-brand-coral px-5 py-2 text-sm font-medium
+      transition hover:bg-brand-coral hover:text-white disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .card {
+    @apply bg-white rounded-xl border border-neutral-200 p-6;
+  }
+  .input {
+    @apply w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm
+      focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-mint;
+  }
+  .label {
+    @apply block text-sm font-medium mb-1;
+  }
+}
