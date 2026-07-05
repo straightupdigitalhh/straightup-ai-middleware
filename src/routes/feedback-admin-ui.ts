@@ -142,8 +142,10 @@ const HTML = `<!DOCTYPE html>
       return sessionStorage.getItem(STORAGE_KEY) || '';
     }
 
+    // Hub-Session-Cookie reicht als Auth; der X-API-Key ist nur der Fallback.
     function authHeaders() {
-      return { 'X-API-Key': getStoredKey() };
+      const key = getStoredKey();
+      return key ? { 'X-API-Key': key } : {};
     }
 
     function showLogin(message) {
@@ -193,26 +195,29 @@ const HTML = `<!DOCTYPE html>
 
     // ─── Login ───────────────────────────────────────────────────
 
-    async function attemptLogin(key) {
+    // key = '' → Versuch über die Hub-Session (Cookie), ohne Fehlermeldung
+    async function attemptLogin(key, silent) {
       clearStatus('login-status');
       try {
-        const res = await fetch('/api/feedback-keys/projects', { headers: { 'X-API-Key': key } });
+        const res = await fetch('/api/feedback-keys/projects', {
+          headers: key ? { 'X-API-Key': key } : {},
+        });
         if (res.status === 200) {
           const data = await res.json();
-          sessionStorage.setItem(STORAGE_KEY, key);
+          if (key) sessionStorage.setItem(STORAGE_KEY, key);
           showMainContent();
           populateProjects(data);
           await loadConnections();
           return true;
         } else if (res.status === 401) {
-          showStatus('login-status', 'Schlüssel ungültig', 'error');
+          if (!silent) showStatus('login-status', 'Schlüssel ungültig', 'error');
           return false;
         } else {
-          showStatus('login-status', await serverErrorMessage(res), 'error');
+          if (!silent) showStatus('login-status', await serverErrorMessage(res), 'error');
           return false;
         }
       } catch (e) {
-        showStatus('login-status', networkErrorMessage(e), 'error');
+        if (!silent) showStatus('login-status', networkErrorMessage(e), 'error');
         return false;
       }
     }
@@ -474,9 +479,11 @@ const HTML = `<!DOCTYPE html>
     updateAssigneeVisibility();
 
     (async function init() {
+      // 1. Hub-Session (Cookie) probieren, 2. gespeicherten Key, sonst Login-Maske
+      if (await attemptLogin('', true)) return;
       const storedKey = getStoredKey();
       if (storedKey) {
-        await attemptLogin(storedKey);
+        await attemptLogin(storedKey, false);
       }
     })();
   </script>

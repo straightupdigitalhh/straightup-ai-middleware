@@ -143,8 +143,10 @@ const HTML = `<!DOCTYPE html>
       return sessionStorage.getItem(STORAGE_KEY) || '';
     }
 
+    // Hub-Session-Cookie reicht als Auth; der X-API-Key ist nur der Fallback.
     function authHeaders() {
-      return { 'X-API-Key': getStoredKey() };
+      const key = getStoredKey();
+      return key ? { 'X-API-Key': key } : {};
     }
 
     function showLogin(message) {
@@ -194,18 +196,20 @@ const HTML = `<!DOCTYPE html>
 
     // ─── Login ───────────────────────────────────────────────────
 
-    async function attemptLogin(key) {
+    // key = '' → Versuch über die Hub-Session (Cookie), ohne Fehlermeldung
+    async function attemptLogin(key, silent) {
       try {
-        const res = await fetch('/api/customers', { headers: { 'X-API-Key': key } });
+        const res = await fetch('/api/customers', { headers: key ? { 'X-API-Key': key } : {} });
         if (res.status === 200) {
           const data = await res.json();
           customers = data.customers || [];
-          sessionStorage.setItem(STORAGE_KEY, key);
+          if (key) sessionStorage.setItem(STORAGE_KEY, key);
           showMainContent();
           setOptions('customer', 'Kunde wählen...', customers);
           setOptions('email-customer', 'Kunde wählen...', customers);
           return true;
         }
+        if (silent) return false;
         if (res.status === 401) {
           showStatusIn('login-status', 'Schlüssel ungültig', 'error');
         } else {
@@ -213,7 +217,7 @@ const HTML = `<!DOCTYPE html>
         }
         return false;
       } catch (e) {
-        showStatusIn('login-status', 'Verbindung zum Server fehlgeschlagen: ' + e.message, 'error');
+        if (!silent) showStatusIn('login-status', 'Verbindung zum Server fehlgeschlagen: ' + e.message, 'error');
         return false;
       }
     }
@@ -364,8 +368,10 @@ const HTML = `<!DOCTYPE html>
     // ─── Init ────────────────────────────────────────────────────
 
     (async function init() {
+      // 1. Hub-Session (Cookie) probieren, 2. gespeicherten Key, sonst Login-Maske
+      if (await attemptLogin('', true)) return;
       const storedKey = getStoredKey();
-      if (storedKey) await attemptLogin(storedKey);
+      if (storedKey) await attemptLogin(storedKey, false);
     })();
   </script>
 </body>
