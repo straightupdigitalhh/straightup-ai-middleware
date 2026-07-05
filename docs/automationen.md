@@ -70,21 +70,32 @@ Die Middleware nutzt eine Entra-App-Registrierung mit **Application Permissions*
    (Exchange Online PowerShell, einmalig) – die Policy zeigt auf eine
    mail-aktivierte Sicherheitsgruppe, deren Mitglieder die erlaubten
    Postfächer sind:
+   Die **Gruppe** lässt sich bequem im Browser anlegen: Exchange Admin Center
+   (admin.exchange.microsoft.com) → Empfänger → Gruppen → „Gruppe hinzufügen" →
+   Typ **„E-Mail-aktivierte Sicherheit"** (nur dieser Typ funktioniert) →
+   Name `middleware-postfaecher`, Mitglieder = die erlaubten Postfächer.
+   **Wichtig:** Alle in `MS_MAILBOXES`/`MS_USER_EMAIL`/`MS_SENDER_EMAIL`
+   konfigurierten Postfächer müssen Mitglied sein, sonst bricht Polling/Versand ab.
+
+   Die **Policy** selbst gibt es nur per PowerShell (macOS: `brew install --cask
+   powershell`, dann `pwsh`):
    ```powershell
-   Connect-ExchangeOnline
-   # 1. Mail-aktivierte Sicherheitsgruppe mit den erlaubten Postfächern:
-   New-DistributionGroup -Name "middleware-postfaecher" -Type Security `
-     -Members jan@straightup-digital.de, gabi@straightup-digital.de
-   # 2. App auf diese Gruppe einschränken:
+   Install-Module ExchangeOnlineManagement -Scope CurrentUser   # einmalig
+   Connect-ExchangeOnline -UserPrincipalName <admin@straightup-digital.de>
+
+   # App einschränken (Client-ID: Entra → App → Übersicht → "Anwendungs-ID (Client)"):
    New-ApplicationAccessPolicy -AppId <client-id> `
      -PolicyScopeGroupId middleware-postfaecher@straightup-digital.de `
-     -AccessRight RestrictAccess -Description "Middleware nur Jan+Gabi"
-   # 3. Prüfen: erlaubtes Postfach → Granted, fremdes → Denied
+     -AccessRight RestrictAccess -Description "straightup Middleware: nur freigegebene Postfaecher"
+
+   # Prüfen: erlaubtes Postfach → Granted, fremdes → Denied
    Test-ApplicationAccessPolicy -AppId <client-id> -Identity jan@straightup-digital.de
    Test-ApplicationAccessPolicy -AppId <client-id> -Identity info@straightup-digital.de
    ```
-   Neue Postfächer später freischalten = einfach zur Gruppe hinzufügen
-   (Policy greift nach bis zu ~30 Min).
+   Die Policy greift nach bis zu ~30 Minuten. Danach Middleware-Log/`/health`
+   prüfen: Das Polling muss weiterlaufen (`ErrorAccessDenied` = Postfach fehlt
+   in der Gruppe). Neue Postfächer später freischalten = einfach zur Gruppe
+   hinzufügen, kein PowerShell mehr nötig.
 2. **Client-Secret pflegen.** Secrets laufen ab (Standard 6–24 Monate) – Ablaufdatum
    in Entra prüfen, sonst stirbt Polling/Versand still. Bei Verdacht auf Weitergabe
    (z. B. jemals in einem Chat/Transkript gelandet) in Entra rotieren und die
