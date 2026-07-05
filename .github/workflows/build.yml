@@ -37,11 +37,13 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-      - name: Deploy to Mittwald (pull & recreate)
+      - name: Deploy to Mittwald (pull image & recreate)
+        # actions/pull = "Pull image and recreate" (lt. Mittwald-OpenAPI-Spec).
+        # Der frühere actions/recreate-Aufruf kennt keinen Request-Body –
+        # {"pullPolicy": "Always"} wurde ignoriert und der Container startete
+        # immer wieder mit dem lokal gecachten alten Image.
         run: |
           curl -sf -X POST \
-            "https://api.mittwald.de/v2/stacks/${{ env.MITTWALD_STACK_ID }}/services/${{ env.MITTWALD_SERVICE_ID }}/actions/recreate" \
-            -H "Authorization: Bearer ${{ secrets.MITTWALD_API_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d '{"pullPolicy": "Always"}'
-          echo "Mittwald container recreated with latest image"
+            "https://api.mittwald.de/v2/stacks/${{ env.MITTWALD_STACK_ID }}/services/${{ env.MITTWALD_SERVICE_ID }}/actions/pull" \
+            -H "Authorization: Bearer ${{ secrets.MITTWALD_API_TOKEN }}"
+          echo "Mittwald: Image gepullt und Container neu erstellt"
