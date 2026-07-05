@@ -57,6 +57,37 @@ gruppiert nach Mitarbeiter → Projekt, 0-Stunden-Tage zuerst.
 | `targetHoursPerDay` | personal | Soll für den Lücken-Hinweis (Default 8, 0 = aus) |
 | `dryRun` | beide | `true`: nur ins Run-Log schreiben, nichts versenden |
 
+## Sicherheit der Graph-Anbindung (Entra/Azure)
+
+Die Middleware nutzt eine Entra-App-Registrierung mit **Application Permissions**
+(App-only, Client-Credentials – kein Nutzer-Login). Zwei Dinge sollte man wissen:
+
+1. **Application Permissions gelten tenant-weit.** `Mail.ReadWrite` (und künftig
+   `Mail.Send`) erlauben der App standardmäßig Zugriff auf **alle Postfächer der
+   Organisation**, nicht nur auf `MS_USER_EMAIL`. Der Code der Middleware greift zwar
+   nur auf dieses eine Postfach zu – aber das erzwingt erst eine **Exchange
+   Application Access Policy** (Exchange Online PowerShell, einmalig):
+   ```powershell
+   Connect-ExchangeOnline
+   # Mail-aktivierte Sicherheitsgruppe anlegen, nur das Middleware-Postfach als Mitglied,
+   # dann die App darauf einschränken:
+   New-ApplicationAccessPolicy -AppId <client-id> `
+     -PolicyScopeGroupId <gruppe@straightup-digital.de> `
+     -AccessRight RestrictAccess -Description "Middleware nur System-Postfach"
+   # Prüfen (sollte für fremde Postfächer "Denied" liefern):
+   Test-ApplicationAccessPolicy -AppId <client-id> -Identity jan@straightup-digital.de
+   ```
+2. **Client-Secret pflegen.** Secrets laufen ab (Standard 6–24 Monate) – Ablaufdatum
+   in Entra prüfen, sonst stirbt Polling/Versand still. Bei Verdacht auf Weitergabe
+   (z. B. jemals in einem Chat/Transkript gelandet) in Entra rotieren und die
+   Server-Env aktualisieren. Langfristig ist ein Zertifikat statt Secret die
+   robustere Variante.
+
+Welche Berechtigungen tatsächlich erteilt sind, zeigt (ohne etwas zu ändern):
+```bash
+npx tsx scripts/graph-permissions-check.ts
+```
+
 ### Hinweise
 
 - Der Cron `55 8 * * 1-5` läuft in Europe/Berlin (Sommer-/Winterzeit inklusive).
