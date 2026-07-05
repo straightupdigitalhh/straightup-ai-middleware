@@ -377,7 +377,7 @@ const HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-router.get('/', (_req: Request, res: Response) => {
+router.get('/wissenssystem', (_req: Request, res: Response) => {
   res.type('html').send(HTML);
 });
 

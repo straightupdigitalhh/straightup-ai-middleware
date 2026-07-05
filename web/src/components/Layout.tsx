@@ -9,7 +9,7 @@ const navItems = [
 ];
 
 const externalTools = [
-  { href: '/', label: 'Wissenssystem ↗' },
+  { href: '/wissenssystem', label: 'Wissenssystem ↗' },
   { href: '/feedback-admin', label: 'BugBee ↗' },
 ];
 

@@ -80,14 +80,14 @@ describe('createApiKeyAuth', () => {
   });
 });
 
-// ─── Startseite: Inline-Script muss gültiges JS sein, kein Key in der URL ──
-describe('GET / (UI)', () => {
+// ─── Wissenssystem-Formular: Inline-Script gültig, kein Key in der URL ──
+describe('GET /wissenssystem (UI)', () => {
   it('liefert HTML mit syntaktisch gültigem Inline-Script und Login statt ?key=', async () => {
     const { default: uiRouter } = await import('../src/routes/ui.js');
     const app = express();
     app.use(uiRouter);
 
-    const res = await request(app).get('/');
+    const res = await request(app).get('/wissenssystem');
     expect(res.status).toBe(200);
     expect(res.type).toMatch(/html/);
 
