@@ -14,6 +14,15 @@ RUN npm install typescript --save-dev && npx tsc && npm remove typescript
 # Cleanup
 RUN rm -rf src/ tsconfig.json
 
+# Nicht als root laufen. Achtung bei Bind-Mounts (./data:/app/data):
+# das Host-Verzeichnis muss uid 1000 (node) gehören, sonst schlägt das
+# Persistieren der Feedback-Keys fehl.
+RUN mkdir -p /app/data && chown -R node:node /app
+USER node
+
 EXPOSE 3500
+
+HEALTHCHECK --interval=60s --timeout=5s --start-period=15s \
+  CMD wget -qO- http://127.0.0.1:3500/healthz || exit 1
 
 CMD ["node", "dist/index.js"]

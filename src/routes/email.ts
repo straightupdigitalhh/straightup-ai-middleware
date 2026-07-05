@@ -3,6 +3,7 @@ import { routeContent, detectCustomer } from '../services/claude.js';
 import { AworkClient } from '../services/awork.js';
 import { AworkResolver } from '../services/resolver.js';
 import { renderEmailLogEntry, renderDecisionLogEntry } from '../templates/index.js';
+import { clientErrorMessage } from '../services/errors.js';
 
 const router = Router();
 
@@ -138,7 +139,7 @@ router.post('/api/email', async (req: Request, res: Response) => {
     console.error('❌ Fehler bei E-Mail-Verarbeitung:', error);
     res.status(500).json({
       error: 'E-Mail-Verarbeitung fehlgeschlagen',
-      message: error.message,
+      message: clientErrorMessage(error),
     });
   }
 });

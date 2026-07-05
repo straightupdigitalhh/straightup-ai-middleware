@@ -11,4 +11,6 @@ services:
       API_KEY: ${API_KEY}
       PORT: "3500"
     volumes:
+      # Container läuft als node (uid 1000) – ./data muss uid 1000 gehören:
+      #   mkdir -p data && chown 1000:1000 data
       - ./data:/app/data

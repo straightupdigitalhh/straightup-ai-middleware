@@ -5,6 +5,16 @@ import { getPollerInstance } from '../services/email-poller.js';
 const router = Router();
 
 /**
+ * GET /healthz
+ * Reine Liveness-Probe (Docker HEALTHCHECK): antwortet der Prozess?
+ * Bewusst ohne awork-Aufruf – externe Ausfälle sollen den Container
+ * nicht als unhealthy markieren.
+ */
+router.get('/healthz', (_req: Request, res: Response) => {
+  res.json({ status: 'ok' });
+});
+
+/**
  * GET /health
  * Prüft ob die Middleware läuft und die awork-API erreichbar ist.
  */

@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import helmet from 'helmet';
 import emailRouter from './routes/email.js';
 import transcriptRouter from './routes/transcript.js';
 import healthRouter from './routes/health.js';
@@ -13,6 +14,7 @@ import { AworkClient } from './services/awork.js';
 import { join } from 'path';
 import { MicrosoftGraphClient } from './services/microsoft-graph.js';
 import { EmailPoller, setPollerInstance, getPollerInstance } from './services/email-poller.js';
+import { createApiKeyAuth } from './services/auth.js';
 
 // ─── Konfiguration prüfen ────────────────────────────────────────
 
@@ -40,6 +42,24 @@ const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
 const app = express();
 const PORT = parseInt(process.env.PORT || '3500', 10);
 
+// Hinter dem Mittwald-Proxy: req.ip soll die echte Client-IP sein (Rate-Limits).
+app.set('trust proxy', 1);
+
+// Security-Header. Inline-Scripts/-Styles der bestehenden Seiten erlauben –
+// nach der Migration auf das Hub-Frontend auf 'self' verschärfen.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+}));
+
 // ─── Feedback-Routen (Extension) ─────────────────────────────────
 // VOR den globalen Body-Parsern: /feedback hat ein eigenes 20-MB-Limit.
 // Auth läuft über projektspezifische X-Feedback-Keys, nicht den Master-Key.
@@ -54,20 +74,10 @@ app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
 // ─── Auth Middleware ─────────────────────────────────────────────
-// Alle /api/* Endpoints werden mit X-API-Key geschützt.
-// Der Health-Check ist öffentlich.
+// Alle /api/* Endpoints werden mit X-API-Key geschützt (timing-sicher,
+// mit Brute-Force-Bremse pro IP). Der Health-Check ist öffentlich.
 
-app.use('/api', (req, res, next) => {
-  const apiKey = req.headers['x-api-key'];
-
-  if (!apiKey || apiKey !== process.env.API_KEY) {
-    console.warn(`🔒 Unautorisierter Zugriff von ${req.ip}: ${req.method} ${req.path}`);
-    res.status(401).json({ error: 'Unauthorized – X-API-Key fehlt oder ungültig' });
-    return;
-  }
-
-  next();
-});
+app.use('/api', createApiKeyAuth(process.env.API_KEY!));
 
 // ─── Request Logging ─────────────────────────────────────────────
 
