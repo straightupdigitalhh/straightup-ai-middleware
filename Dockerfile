@@ -14,11 +14,12 @@ RUN npm install typescript --save-dev && npx tsc && npm remove typescript
 # Cleanup
 RUN rm -rf src/ tsconfig.json
 
-# Nicht als root laufen. Achtung bei Bind-Mounts (./data:/app/data):
-# das Host-Verzeichnis muss uid 1000 (node) gehören, sonst schlägt das
-# Persistieren der Feedback-Keys fehl.
-RUN mkdir -p /app/data && chown -R node:node /app
-USER node
+# Nicht als root laufen: der Entrypoint startet als root, gibt dem
+# node-User das data-Volume (chown) und wechselt dann per su-exec zu ihm.
+RUN apk add --no-cache su-exec && chown -R node:node /app
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 EXPOSE 3500
 

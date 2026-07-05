@@ -14,7 +14,14 @@ import { AworkClient } from './services/awork.js';
 import { join } from 'path';
 import { MicrosoftGraphClient } from './services/microsoft-graph.js';
 import { EmailPoller, setPollerInstance, getPollerInstance } from './services/email-poller.js';
-import { createApiKeyAuth } from './services/auth.js';
+import { createApiAuth } from './services/auth.js';
+import { openDb } from './core/db.js';
+import { UserStore } from './core/users.js';
+import { SessionStore } from './core/sessions.js';
+import { Scheduler } from './core/scheduler.js';
+import { createAuthRouter } from './routes/auth.js';
+import { createUsersAdminRouter } from './routes/users-admin.js';
+import { createAutomationsRouter } from './routes/automations.js';
 
 // ─── Konfiguration prüfen ────────────────────────────────────────
 
@@ -30,11 +37,47 @@ if (!process.env.AWORK_WORKSPACE_URL) {
   console.warn('⚠️  AWORK_WORKSPACE_URL nicht gesetzt – Ticket-Antworten enthalten keinen Task-Link');
 }
 
+// ─── Datenbank, Nutzer, Scheduler ────────────────────────────────
+
+const DATA_DIR = process.env.DATA_DIR || process.env.FEEDBACK_DATA_DIR || './data';
+const db = openDb(join(DATA_DIR, 'middleware.db'));
+const users = new UserStore(db);
+const sessions = new SessionStore(db, users);
+const scheduler = new Scheduler(db);
+
+// Erst-Admin anlegen, solange es noch keine Nutzer gibt
+if (users.count() === 0) {
+  const { ADMIN_EMAIL, ADMIN_NAME, ADMIN_INITIAL_PASSWORD } = process.env;
+  if (ADMIN_EMAIL && ADMIN_INITIAL_PASSWORD) {
+    users.create({
+      email: ADMIN_EMAIL,
+      name: ADMIN_NAME || ADMIN_EMAIL.split('@')[0],
+      role: 'admin',
+      password: ADMIN_INITIAL_PASSWORD,
+    });
+    console.log(`👤 Erst-Admin angelegt: ${ADMIN_EMAIL} (Passwort nach dem ersten Login ändern!)`);
+  } else {
+    console.warn('⚠️  Keine Nutzer vorhanden und ADMIN_EMAIL/ADMIN_INITIAL_PASSWORD nicht gesetzt – Session-Login bleibt inaktiv, X-API-Key funktioniert weiter');
+  }
+}
+
+// Housekeeping: abgelaufene Sessions täglich aufräumen
+scheduler.register({
+  id: 'session-cleanup',
+  name: 'Session-Aufräumen',
+  description: 'Löscht abgelaufene Login-Sessions aus der Datenbank',
+  defaultCron: '0 4 * * *',
+  enabledByDefault: true,
+  async run(ctx) {
+    sessions.purgeExpired();
+    ctx.log('Abgelaufene Sessions entfernt');
+    return 'Abgelaufene Sessions entfernt';
+  },
+});
+
 // ─── Feedback-Infrastruktur ──────────────────────────────────────
 
-const feedbackKeyStore = new FeedbackKeyStore(
-  join(process.env.FEEDBACK_DATA_DIR || './data', 'feedback-keys.json'),
-);
+const feedbackKeyStore = new FeedbackKeyStore(join(DATA_DIR, 'feedback-keys.json'));
 const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
 
 // ─── Express App ─────────────────────────────────────────────────
@@ -73,11 +116,15 @@ app.use('/feedback', createFeedbackRouter({
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-// ─── Auth Middleware ─────────────────────────────────────────────
-// Alle /api/* Endpoints werden mit X-API-Key geschützt (timing-sicher,
-// mit Brute-Force-Bremse pro IP). Der Health-Check ist öffentlich.
+// ─── Session-Login (Hub) ─────────────────────────────────────────
 
-app.use('/api', createApiKeyAuth(process.env.API_KEY!));
+app.use(createAuthRouter({ users, sessions }));
+
+// ─── Auth Middleware ─────────────────────────────────────────────
+// Alle /api/* Endpoints akzeptieren Session-Cookie ODER X-API-Key
+// (timing-sicher, mit Brute-Force-Bremse pro IP). Health ist öffentlich.
+
+app.use('/api', createApiAuth(process.env.API_KEY!, sessions));
 
 // ─── Request Logging ─────────────────────────────────────────────
 
@@ -95,6 +142,8 @@ app.use(lookupRouter);      // GET /api/customers, /api/projects (auth)
 app.use(emailRouter);       // POST /api/email (auth)
 app.use(transcriptRouter);  // POST /api/transcript (auth)
 app.use(createFeedbackAdminRouter({ store: feedbackKeyStore, awork: aworkClient })); // /api/feedback-keys (auth)
+app.use(createUsersAdminRouter({ users, sessions }));  // /api/users (nur Admins)
+app.use(createAutomationsRouter({ scheduler }));       // /api/automations (auth, steuern nur Admins)
 
 // ─── 404 Handler ─────────────────────────────────────────────────
 
@@ -108,6 +157,9 @@ app.use((_req, res) => {
       'POST /api/feedback-keys': 'Feedback-Key anlegen',
       'GET /api/feedback-keys': 'Feedback-Keys auflisten',
       'GET /feedback-admin': 'Verbindungen verwalten',
+      'POST /auth/login': 'Anmelden (Session)',
+      'GET /api/automations': 'Automationen und Status',
+      'GET /api/users': 'Nutzerverwaltung (Admin)',
     },
   });
 });
@@ -133,6 +185,9 @@ app.listen(PORT, () => {
   console.log('╚═══════════════════════════════════════════════════╝');
   console.log('');
 
+  // Automationen planen (Cron, Europe/Berlin)
+  scheduler.start();
+
   // E-Mail-Polling starten (nur wenn MS_* Variablen gesetzt sind)
   const { MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, MS_USER_EMAIL } = process.env;
   if (MS_TENANT_ID && MS_CLIENT_ID && MS_CLIENT_SECRET && MS_USER_EMAIL) {
@@ -156,6 +211,8 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     console.log(`\n${signal} empfangen, fahre herunter...`);
     const poller = getPollerInstance();
     if (poller) poller.stop();
+    scheduler.stop();
+    db.close();
     process.exit(0);
   });
 }
