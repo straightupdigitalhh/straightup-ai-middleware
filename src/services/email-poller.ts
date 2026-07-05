@@ -14,6 +14,7 @@ export function getPollerInstance(): EmailPoller | null {
 import { routeContent, detectCustomer } from './claude.js';
 import { AworkClient } from './awork.js';
 import { AworkResolver } from './resolver.js';
+import { UserFacingError } from './errors.js';
 import { renderEmailLogEntry, renderDecisionLogEntry } from '../templates/index.js';
 
 // ─── Types ───────────────────────────────────────────────────────
@@ -22,6 +23,8 @@ export interface EmailPollerConfig {
   pollInterval: number;
   triggerCategory: string;
   processedCategory: string;
+  /** Kategorie für Mails, die fachlich nicht verarbeitbar sind (kein Retry). */
+  errorCategory?: string;
 }
 
 interface PollerStatus {
@@ -106,7 +109,22 @@ export class EmailPoller {
             errors++;
             this.status.totalErrors++;
             console.error(`   ❌ Fehler bei E-Mail "${email.subject}": ${error.message}`);
-            // NICHT als verarbeitet markieren → wird beim nächsten Poll erneut versucht
+            if (error instanceof UserFacingError) {
+              // Fachlicher Fehler (z. B. Projekt nicht gefunden): ein Retry
+              // ändert nichts → als fehlgeschlagen markieren statt alle
+              // 3 Minuten erneut zu scheitern. Kategorie korrigieren + neu
+              // taggen startet einen neuen Versuch.
+              try {
+                const newCategories = email.categories
+                  .filter(c => c !== this.config.triggerCategory)
+                  .concat(this.config.errorCategory || '⚠️ Fehler');
+                await client.updateEmailCategories(email.id, newCategories);
+                console.warn(`   ⚠ E-Mail "${email.subject}" als fehlgeschlagen markiert (kein automatischer Retry)`);
+              } catch (markError: any) {
+                console.error(`   ❌ Fehler-Markierung fehlgeschlagen: ${markError.message}`);
+              }
+            }
+            // Technische Fehler (API down o. ä.): unmarkiert lassen → Retry beim nächsten Poll
           }
         }
       } catch (error: any) {
