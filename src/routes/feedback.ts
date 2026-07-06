@@ -8,6 +8,14 @@ import {
 } from '../services/feedback-ticket.js';
 import { FixedWindowLimiter } from '../services/rate-limit.js';
 
+/**
+ * Fälligkeit neuer Feedback-Tickets: standardmäßig 72 Stunden nach dem
+ * Melde-Zeitpunkt. Über FEEDBACK_TICKET_DUE_HOURS anpassbar (0 = keine Fälligkeit).
+ */
+const FEEDBACK_TICKET_DUE_HOURS = process.env.FEEDBACK_TICKET_DUE_HOURS !== undefined
+  ? Number(process.env.FEEDBACK_TICKET_DUE_HOURS)
+  : 72;
+
 interface Deps {
   store: FeedbackKeyStore;
   awork: Pick<AworkClient, 'getProject' | 'getProjectMembers' | 'createTask' | 'setTaskAssignees' | 'uploadTaskFile'>;
@@ -128,6 +136,10 @@ export function createFeedbackRouter({
     }
 
     // Task anlegen – Kern der Operation, Fehler hier = 502
+    // Fälligkeit: 72 h (konfigurierbar) nach dem Melde-Zeitpunkt.
+    const dueOn = FEEDBACK_TICKET_DUE_HOURS > 0
+      ? new Date(Date.now() + FEEDBACK_TICKET_DUE_HOURS * 3600_000).toISOString()
+      : undefined;
     let taskId: string;
     try {
       const task = await awork.createTask(
@@ -135,6 +147,7 @@ export function createFeedbackRouter({
         record.projectId,
         record.taskListId,
         buildTicketDescriptionHtml(ticket),
+        dueOn,
       );
       taskId = task.id;
     } catch (e: any) {
