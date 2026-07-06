@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, AutomationRun, AutomationStatus, formatDateTime } from '../lib/api';
 import { runBadge } from '../components/StatusBadge';
+import TimetrackingRecipients from '../components/TimetrackingRecipients';
 import { useAuth } from '../App';
 
 export default function AutomationDetailPage() {
@@ -90,6 +91,14 @@ export default function AutomationDetailPage() {
 
       {message && <p className="mb-3 text-sm text-brand-green">{message}</p>}
       {error && <p className="mb-3 text-sm text-brand-coral">{error}</p>}
+
+      {isAdmin && automation.id.startsWith('timetracking-') && (
+        <TimetrackingRecipients
+          automationId={automation.id}
+          settings={automation.settings ?? {}}
+          onSaved={load}
+        />
+      )}
 
       {isAdmin && (
         <div className="card mb-6">

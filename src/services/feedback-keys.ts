@@ -106,6 +106,10 @@ export class FeedbackKeyStore {
     return [...this.records];
   }
 
+  findById(id: string): FeedbackKeyRecord | undefined {
+    return this.records.find(r => r.id === id);
+  }
+
   findActive(key: string): FeedbackKeyRecord | undefined {
     return this.records.find(r => r.key === key && r.revokedAt === null);
   }
@@ -121,6 +125,15 @@ export class FeedbackKeyStore {
   private revokeRecord(record: FeedbackKeyRecord | undefined): boolean {
     if (!record) return false;
     record.revokedAt = new Date().toISOString();
+    this.persist();
+    return true;
+  }
+
+  /** Endgültig entfernen (nur für bereits widerrufene Einträge sinnvoll). */
+  remove(id: string): boolean {
+    const idx = this.records.findIndex(r => r.id === id);
+    if (idx === -1) return false;
+    this.records.splice(idx, 1);
     this.persist();
     return true;
   }

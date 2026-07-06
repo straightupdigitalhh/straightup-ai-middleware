@@ -5,12 +5,12 @@ import { useAuth } from '../App';
 const navItems = [
   { to: '/', label: 'Dashboard', exact: true },
   { to: '/automationen', label: 'Automationen' },
+  { to: '/bugbee', label: 'BugBee', adminOnly: true },
   { to: '/nutzer', label: 'Nutzer', adminOnly: true },
 ];
 
 const externalTools = [
   { href: '/wissenssystem', label: 'Wissenssystem ↗' },
-  { href: '/feedback-admin', label: 'BugBee ↗' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

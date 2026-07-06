@@ -17,6 +17,10 @@ body {
     @apply inline-flex items-center gap-2 rounded-pill border border-brand-ink px-5 py-2 text-sm font-medium
       transition hover:bg-brand-mint disabled:opacity-40 disabled:pointer-events-none;
   }
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 rounded-pill border border-neutral-300 text-neutral-700 px-5 py-2 text-sm font-medium
+      transition hover:bg-neutral-100 disabled:opacity-40 disabled:pointer-events-none;
+  }
   .btn-danger {
     @apply inline-flex items-center gap-2 rounded-pill border border-brand-coral text-brand-coral px-5 py-2 text-sm font-medium
       transition hover:bg-brand-coral hover:text-white disabled:opacity-40 disabled:pointer-events-none;

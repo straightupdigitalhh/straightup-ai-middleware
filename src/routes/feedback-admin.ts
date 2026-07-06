@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { AworkClient } from '../services/awork.js';
 import { FeedbackKeyStore } from '../services/feedback-keys.js';
+import { requireAdmin, getAuth } from '../services/auth.js';
 
 export const FEEDBACK_LIST_NAME = 'Website-Feedback';
 
@@ -72,6 +73,23 @@ export function createFeedbackAdminRouter({ store, awork }: Deps): Router {
     })));
   });
 
+  // Klartext-Key erneut abrufen (Admins). Nötig, weil mehrere Personen den
+  // Verbindungsschlüssel pro Browser eintragen müssen – er lässt sich sonst
+  // nach der Anlage nicht mehr auslesen. Bewusst nur für Admins + Audit-Log:
+  // der Key ist ein geteiltes, projektgebundenes, widerrufbares Token (kein
+  // persönliches Passwort) und liegt ohnehin im Klartext im Store.
+  router.get('/api/feedback-keys/:id/key', requireAdmin, (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    const record = store.findById(id);
+    if (!record) {
+      res.status(404).json({ error: 'not_found', message: 'Key unbekannt' });
+      return;
+    }
+    const who = getAuth(res)?.user?.email || 'api-key';
+    console.log(`🔓 Feedback-Key eingesehen: ${record.label} (${id.slice(0, 12)}…) durch ${who}`);
+    res.json({ key: record.key });
+  });
+
   // Widerruf per id; der Klartext-Key wird aus Kompatibilität weiter akzeptiert.
   router.delete('/api/feedback-keys/:id', (req: Request, res: Response) => {
     const id = req.params.id as string;
@@ -80,6 +98,19 @@ export function createFeedbackAdminRouter({ store, awork }: Deps): Router {
       res.status(204).end();
     } else {
       res.status(404).json({ error: 'not_found', message: 'Key unbekannt oder bereits widerrufen' });
+    }
+  });
+
+  // Endgültig löschen (Admins). Entfernt den Eintrag komplett aus der Liste –
+  // gedacht für bereits widerrufene Verbindungen, die aufgeräumt werden sollen.
+  router.delete('/api/feedback-keys/:id/permanent', requireAdmin, (req: Request, res: Response) => {
+    const id = req.params.id as string;
+    if (store.remove(id)) {
+      const who = getAuth(res)?.user?.email || 'api-key';
+      console.log(`🗑️  Feedback-Key endgültig gelöscht: ${id.slice(0, 12)}… durch ${who}`);
+      res.status(204).end();
+    } else {
+      res.status(404).json({ error: 'not_found', message: 'Key unbekannt' });
     }
   });
 

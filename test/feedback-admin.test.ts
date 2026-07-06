@@ -7,10 +7,18 @@ import { join } from 'path';
 import { FeedbackKeyStore } from '../src/services/feedback-keys.js';
 import { createFeedbackAdminRouter } from '../src/routes/feedback-admin.js';
 
-function makeApp(aworkStub: any) {
+function makeApp(aworkStub: any, auth?: { role: 'admin' | 'member'; email?: string }) {
   const store = new FeedbackKeyStore(join(mkdtempSync(join(tmpdir(), 'fbadmin-')), 'keys.json'));
   const app = express();
   app.use(express.json());
+  // Auth-Kontext simulieren (requireAdmin liest res.locals.auth). Ohne Angabe
+  // bleibt res.locals.auth leer → geschützte Endpunkte antworten mit 403.
+  if (auth) {
+    app.use((_req, res, next) => {
+      res.locals.auth = { via: 'session', role: auth.role, user: { email: auth.email } };
+      next();
+    });
+  }
   app.use(createFeedbackAdminRouter({ store, awork: aworkStub }));
   return { app, store };
 }
@@ -109,6 +117,54 @@ describe('GET + DELETE /api/feedback-keys', () => {
 
     const del = await request(app).delete(`/api/feedback-keys/${created.body.key}`);
     expect(del.status).toBe(204);
+  });
+});
+
+describe('GET /api/feedback-keys/:id/key (Klartext erneut abrufen)', () => {
+  const awork = { getTaskLists: vi.fn().mockResolvedValue([{ id: 'l', name: 'Website-Feedback' }]), createTaskList: vi.fn(), getProjects: vi.fn(), getProjectMembers: vi.fn() };
+
+  it('gibt Admins den Klartext-Key zurück', async () => {
+    const { app } = makeApp(awork, { role: 'admin', email: 'jan@straightup-digital.de' });
+    const created = await request(app).post('/api/feedback-keys').send(validBody);
+    const res = await request(app).get(`/api/feedback-keys/${created.body.id}/key`);
+    expect(res.status).toBe(200);
+    expect(res.body.key).toBe(created.body.key);
+  });
+
+  it('403 für Nicht-Admins', async () => {
+    const { app } = makeApp(awork, { role: 'member' });
+    const created = await request(app).post('/api/feedback-keys').send(validBody);
+    const res = await request(app).get(`/api/feedback-keys/${created.body.id}/key`);
+    expect(res.status).toBe(403);
+  });
+
+  it('404 bei unbekannter id', async () => {
+    const { app } = makeApp(awork, { role: 'admin' });
+    const res = await request(app).get('/api/feedback-keys/gibtsnicht/key');
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('DELETE /api/feedback-keys/:id/permanent (endgültig löschen)', () => {
+  const awork = { getTaskLists: vi.fn().mockResolvedValue([{ id: 'l', name: 'Website-Feedback' }]), createTaskList: vi.fn(), getProjects: vi.fn(), getProjectMembers: vi.fn() };
+
+  it('entfernt den Eintrag vollständig (Admin)', async () => {
+    const { app } = makeApp(awork, { role: 'admin', email: 'jan@…' });
+    const created = await request(app).post('/api/feedback-keys').send(validBody);
+    const del = await request(app).delete(`/api/feedback-keys/${created.body.id}/permanent`);
+    expect(del.status).toBe(204);
+    const list = await request(app).get('/api/feedback-keys');
+    expect(list.body).toHaveLength(0);
+    // zweiter Versuch → 404
+    const again = await request(app).delete(`/api/feedback-keys/${created.body.id}/permanent`);
+    expect(again.status).toBe(404);
+  });
+
+  it('403 für Nicht-Admins', async () => {
+    const { app } = makeApp(awork, { role: 'member' });
+    const created = await request(app).post('/api/feedback-keys').send(validBody);
+    const del = await request(app).delete(`/api/feedback-keys/${created.body.id}/permanent`);
+    expect(del.status).toBe(403);
   });
 });
 
