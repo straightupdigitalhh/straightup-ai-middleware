@@ -63,11 +63,17 @@ describe('POST /feedback/tickets', () => {
       taskUrl: 'https://acme.awork.com/tasks/task-77',
       screenshotAttached: true,
     });
-    // Task: Name = erste Zeile, Projekt + Liste aus dem Key, HTML-Beschreibung
+    // Task: Name = erste Zeile, Projekt + Liste aus dem Key, HTML-Beschreibung,
+    // Fälligkeit als ISO-Zeitstempel (72 h nach Anlage)
     expect(stub.createTask).toHaveBeenCalledWith(
       'Der Button ist zu klein', 'proj-1', 'list-1',
       expect.stringContaining('Kunde Klaus'),
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/),
     );
+    // Fälligkeit liegt ~72 h in der Zukunft (kleine Toleranz für die Laufzeit)
+    const dueOn = new Date(stub.createTask.mock.calls[0][4]).getTime();
+    const expected = Date.now() + 72 * 3600_000;
+    expect(Math.abs(dueOn - expected)).toBeLessThan(60_000);
     // Screenshot als Task-Datei
     expect(stub.uploadTaskFile).toHaveBeenCalledWith(
       'task-77', expect.any(Buffer), expect.stringMatching(/^screenshot-.*\.png$/), 'image/png',
