@@ -1,0 +1,59 @@
+import { describe, it, expect } from 'vitest';
+import express from 'express';
+import helmet from 'helmet';
+import request from 'supertest';
+import { createFeedbackRouter } from '../src/routes/feedback.js';
+import { FeedbackKeyStore } from '../src/services/feedback-keys.js';
+import { mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+// Regression: helmet lief global VOR dem /feedback-Mount und setzte
+// Cross-Origin-Resource-Policy: same-origin + strikte CSP auch auf die
+// öffentliche Extension-API. Browser verwarfen daraufhin die Cross-Origin-
+// Antwort ("Feedback-Server nicht erreichbar"). /feedback muss VOR helmet
+// gemountet sein – dieser Test bildet die App-Reihenfolge aus index.ts nach.
+
+function makeApp() {
+  const store = new FeedbackKeyStore(join(mkdtempSync(join(tmpdir(), 'fbwiring-')), 'keys.json'));
+  const awork = {
+    getProject: async () => ({ id: 'p', name: 'Test' }),
+    getProjectMembers: async () => [],
+    createTask: async () => ({ id: 't', name: 'x', projectId: 'p' }),
+    setTaskAssignees: async () => {},
+    uploadTaskFile: async () => ({}),
+  };
+  const app = express();
+  app.set('trust proxy', 1);
+  // Reihenfolge wie in src/index.ts: /feedback zuerst, dann helmet
+  app.use('/feedback', createFeedbackRouter({ store, awork: awork as any, workspaceUrl: '' }));
+  app.use(helmet());
+  app.get('/health', (_req, res) => { res.json({ status: 'ok' }); });
+  return app;
+}
+
+describe('App-Verdrahtung: helmet vs. /feedback', () => {
+  it('/feedback trägt KEINE Cross-Origin-Resource-Policy (Extension-tauglich)', async () => {
+    const res = await request(makeApp()).options('/feedback/session')
+      .set('Origin', 'https://kunde.de')
+      .set('Access-Control-Request-Method', 'GET');
+    expect(res.headers['cross-origin-resource-policy']).toBeUndefined();
+    expect(res.headers['content-security-policy']).toBeUndefined();
+    // CORS des Feedback-Routers bleibt erhalten
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+  });
+
+  it('/feedback/session (401) trägt CORS-Header, aber keine helmet-Header', async () => {
+    const res = await request(makeApp()).get('/feedback/session').set('Origin', 'https://kunde.de');
+    expect(res.status).toBe(401);
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+    expect(res.headers['cross-origin-resource-policy']).toBeUndefined();
+  });
+
+  it('andere Routen (z. B. /health) bekommen weiterhin die helmet-Header', async () => {
+    const res = await request(makeApp()).get('/health');
+    expect(res.status).toBe(200);
+    expect(res.headers['cross-origin-resource-policy']).toBe('same-origin');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+});

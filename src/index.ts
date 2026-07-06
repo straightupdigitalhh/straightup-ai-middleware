@@ -114,8 +114,22 @@ const PORT = parseInt(process.env.PORT || '3500', 10);
 // Hinter dem Mittwald-Proxy: req.ip soll die echte Client-IP sein (Rate-Limits).
 app.set('trust proxy', 1);
 
-// Security-Header. Inline-Scripts/-Styles der bestehenden Seiten erlauben –
-// nach der Migration auf das Hub-Frontend auf 'self' verschärfen.
+// ─── Feedback-Routen (Extension) ─────────────────────────────────
+// BEWUSST VOR helmet: /feedback ist eine öffentliche Cross-Origin-API,
+// die die Browser-Extension von beliebigen Kundenseiten aufruft. helmets
+// Cross-Origin-Resource-Policy (same-origin) und die strikte CSP würden
+// den Browser die Antwort verwerfen lassen ("Feedback-Server nicht
+// erreichbar"). CORS regelt der Router selbst. Auch vor den globalen
+// Body-Parsern, weil /feedback ein eigenes 20-MB-Limit hat.
+app.use('/feedback', createFeedbackRouter({
+  store: feedbackKeyStore,
+  awork: aworkClient,
+  workspaceUrl: process.env.AWORK_WORKSPACE_URL || '',
+}));
+
+// Security-Header für alle übrigen Routen (Hub, Admin, API, Formulare).
+// Inline-Scripts/-Styles der bestehenden Seiten erlauben – nach der
+// Migration auf das Hub-Frontend auf 'self' verschärfen.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -127,15 +141,6 @@ app.use(helmet({
       frameAncestors: ["'none'"],
     },
   },
-}));
-
-// ─── Feedback-Routen (Extension) ─────────────────────────────────
-// VOR den globalen Body-Parsern: /feedback hat ein eigenes 20-MB-Limit.
-// Auth läuft über projektspezifische X-Feedback-Keys, nicht den Master-Key.
-app.use('/feedback', createFeedbackRouter({
-  store: feedbackKeyStore,
-  awork: aworkClient,
-  workspaceUrl: process.env.AWORK_WORKSPACE_URL || '',
 }));
 
 // JSON + URL-encoded Body Parsing
