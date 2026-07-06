@@ -24,6 +24,7 @@ import { createAuthRouter } from './routes/auth.js';
 import { createTimetrackingAutomations } from './services/timetracking.js';
 import { createUsersAdminRouter } from './routes/users-admin.js';
 import { createAutomationsRouter } from './routes/automations.js';
+import { createTimetrackingRouter } from './routes/timetracking.js';
 
 // ─── Konfiguration prüfen ────────────────────────────────────────
 
@@ -196,6 +197,7 @@ app.use(transcriptRouter);  // POST /api/transcript (auth)
 app.use(createFeedbackAdminRouter({ store: feedbackKeyStore, awork: aworkClient })); // /api/feedback-keys (auth)
 app.use(createUsersAdminRouter({ users, sessions }));  // /api/users (nur Admins)
 app.use(createAutomationsRouter({ scheduler }));       // /api/automations (auth, steuern nur Admins)
+app.use(createTimetrackingRouter({ awork: aworkClient })); // /api/timetracking/users (Admin)
 
 // ─── 404 Handler ─────────────────────────────────────────────────
 

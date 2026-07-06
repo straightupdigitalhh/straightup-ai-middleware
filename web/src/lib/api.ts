@@ -33,6 +33,43 @@ export interface AutomationRun {
   log?: string;
 }
 
+export interface TimetrackingUser {
+  id: string;
+  name: string;
+  email: string | null;
+}
+
+export interface FeedbackKey {
+  id: string;
+  label: string;
+  domains: string[];
+  projectId: string;
+  taskListId: string;
+  type: 'internal' | 'customer';
+  defaultAssigneeId: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+  keyPrefix: string;
+}
+
+export interface FeedbackProject {
+  id: string;
+  name: string;
+}
+
+export interface FeedbackMember {
+  id: string;
+  name: string;
+}
+
+export interface CreateFeedbackKeyInput {
+  label: string;
+  domains: string[];
+  projectId: string;
+  type: 'internal' | 'customer';
+  defaultAssigneeId?: string | null;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -78,6 +115,23 @@ export const api = {
     request<User>('/api/users', { method: 'POST', body: JSON.stringify(input) }),
   patchUser: (id: string, patch: { role?: 'admin' | 'member'; disabled?: boolean; password?: string }) =>
     request<User>(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+
+  // Zeiterfassung – Empfänger-Auswahl
+  timetrackingUsers: () => request<TimetrackingUser[]>('/api/timetracking/users'),
+
+  // BugBee – Feedback-Verbindungen
+  feedbackKeys: () => request<FeedbackKey[]>('/api/feedback-keys'),
+  createFeedbackKey: (input: CreateFeedbackKeyInput) =>
+    request<{ id: string; key: string; label: string }>('/api/feedback-keys', {
+      method: 'POST', body: JSON.stringify(input),
+    }),
+  revealFeedbackKey: (id: string) => request<{ key: string }>(`/api/feedback-keys/${id}/key`),
+  revokeFeedbackKey: (id: string) => request<void>(`/api/feedback-keys/${id}`, { method: 'DELETE' }),
+  deleteFeedbackKey: (id: string) =>
+    request<void>(`/api/feedback-keys/${id}/permanent`, { method: 'DELETE' }),
+  feedbackProjects: () => request<FeedbackProject[]>('/api/feedback-keys/projects'),
+  feedbackProjectMembers: (projectId: string) =>
+    request<FeedbackMember[]>(`/api/feedback-keys/project-members/${projectId}`),
 
   // Status
   health: () => request<{ status: string; checks: Record<string, string> }>('/health'),

@@ -7,6 +7,7 @@ import DashboardPage from './pages/Dashboard';
 import AutomationsPage from './pages/Automations';
 import AutomationDetailPage from './pages/AutomationDetail';
 import UsersPage from './pages/Users';
+import BugBeePage from './pages/BugBee';
 
 interface AuthState {
   user: User | null;
@@ -51,6 +52,7 @@ export default function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/automationen" element={<AutomationsPage />} />
             <Route path="/automationen/:id" element={<AutomationDetailPage />} />
+            <Route path="/bugbee" element={<BugBeePage />} />
             <Route path="/nutzer" element={<UsersPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

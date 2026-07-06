@@ -78,6 +78,28 @@ describe('FeedbackKeyStore', () => {
     expect(persisted[0].id).toBe(migrated.id);
   });
 
+  it('findById liefert den Datensatz (auch widerrufen)', () => {
+    const rec = store.create({
+      label: 'A', domains: ['a.de'], projectId: 'p', taskListId: 'l', type: 'internal',
+    });
+    expect(store.findById(rec.id)?.key).toBe(rec.key);
+    store.revokeById(rec.id);
+    // anders als findActive bleibt findById auch nach Widerruf gültig
+    expect(store.findById(rec.id)?.id).toBe(rec.id);
+    expect(store.findById('gibtsnicht')).toBeUndefined();
+  });
+
+  it('remove löscht endgültig und persistiert', () => {
+    const rec = store.create({
+      label: 'A', domains: ['a.de'], projectId: 'p', taskListId: 'l', type: 'internal',
+    });
+    expect(store.remove(rec.id)).toBe(true);
+    expect(store.list()).toHaveLength(0);
+    expect(store.remove(rec.id)).toBe(false);
+    // auch nach Reload verschwunden
+    expect(new FeedbackKeyStore(storePath).list()).toHaveLength(0);
+  });
+
   it('defaultAssigneeId ist null wenn nicht angegeben', () => {
     const rec = store.create({
       label: 'A', domains: ['a.de'], projectId: 'p', taskListId: 'l', type: 'internal',
