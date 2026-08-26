@@ -253,10 +253,18 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
 // Aus Task 7 hierher verschoben (Task-7-Report: "Fall (e) ... kommt in
 // Task 8"). Baut die Middleware-Kette wie src/index.ts sie zusammensteckt
 // (helmet mit derselben CSP-Konfiguration, SPA-Catchall unter /app, dann
-// erst der Page-Router OHNE Pfad-Präfix, siehe createPageAuth-Hinweis in
-// src/services/auth.ts) — ohne echten Hub-Build und ohne den echten
-// src/index.ts-Modul-Einstiegspunkt zu importieren (der hat Seiteneffekte:
-// liest Pflicht-Env-Vars, öffnet die echte DB-Datei, startet den Server).
+// erst der Page-Router OHNE Pfad-Präfix) — ohne echten Hub-Build und ohne
+// den echten src/index.ts-Modul-Einstiegspunkt zu importieren (der hat
+// Seiteneffekte: liest Pflicht-Env-Vars, öffnet die echte DB-Datei, startet
+// den Server).
+//
+// Fix-Runde 1 (Task 8): der Guard (createPageAuth) wird dem Page-Router als
+// Route-Middleware übergeben (deps.pageAuth) statt global vorgeschaltet zu
+// werden — ein globales app.use(createPageAuth(...), router) hätte JEDE
+// unauthentifizierte Anfrage auf jeden bis dahin unverarbeiteten Pfad mit
+// 302 statt dem JSON-404 beantwortet (siehe die beiden "/gibtsnicht"-Tests
+// unten). req.path bleibt für den Guard trotzdem "/teamboard", weil der
+// Router selbst ohne Pfad-Präfix gemountet wird.
 
 async function loginCookie(app: express.Express, email: string, password: string): Promise<string> {
   const res = await request(app).post("/auth/login").send({ email, password });
@@ -300,10 +308,12 @@ function makeRealApp() {
   });
   // Reihenfolge wie in src/index.ts: nach helmet, vor dem 404-Handler,
   // NICHT unter /app. Ohne Pfad-Präfix, damit createPageAuth req.path
-  // unverändert sieht (siehe Hinweis aus Task 7).
-  app.use(createPageAuth(sessions, "/app/"), createTeamboardPageRouter({
+  // unverändert sieht — der Guard läuft aber NUR auf GET /teamboard
+  // (deps.pageAuth als Route-Middleware), nicht app-weit.
+  app.use(createTeamboardPageRouter({
     ladeBoard: async () => boardStandFixture,
     renderSeite,
+    pageAuth: createPageAuth(sessions, "/app/"),
   }));
   app.use((_req, res) => {
     res.status(404).json({ error: "Endpoint nicht gefunden" });
@@ -342,5 +352,24 @@ describe("Wiring (Muster C): /teamboard im echten App-Aufbau", () => {
     const res = await request(app).get("/teamboard");
     expect(res.status).toBe(302);
     expect(res.headers.location).toBe("/app/?next=%2Fteamboard");
+  });
+
+  // Fix-Runde 1 (Task 8): der Guard darf NUR auf GET /teamboard greifen,
+  // nicht app-weit. Ein unbekannter Pfad ohne Session muss weiterhin den
+  // normalen JSON-404 bekommen statt vom Page-Guard mit 302 abgefangen zu
+  // werden (RED gegen den unscoped Mount, GREEN gegen den Route-Middleware-
+  // Fix in routes/teamboard.ts + index.ts).
+  it("unauth GET /gibtsnicht ⇒ 404 (JSON-404 der App, NICHT vom Page-Guard abgefangen)", async () => {
+    const { app } = makeRealApp();
+    const res = await request(app).get("/gibtsnicht");
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Endpoint nicht gefunden" });
+  });
+
+  it("unauth POST /gibtsnicht ⇒ 404 (auch für andere HTTP-Methoden auf unbekannte Pfade)", async () => {
+    const { app } = makeRealApp();
+    const res = await request(app).post("/gibtsnicht");
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Endpoint nicht gefunden" });
   });
 });

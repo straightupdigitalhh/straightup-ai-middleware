@@ -220,14 +220,20 @@ app.use(createTeamboardRouter({
 })); // /api/teamboard/* (board/avatar: Session ODER Key; zeiten/einstellungen: nur Session)
 
 // GET /teamboard (HTML-Seite, nur Session — kein Master-Key, das ist kein
-// API-Client). Bewusst OHNE Pfad-Präfix gemountet: createPageAuth baut die
+// API-Client). Der Guard (createPageAuth) wird dem Router als Route-
+// Middleware übergeben (deps.pageAuth) statt global vorgeschaltet — ein
+// globales app.use(createPageAuth(...), router) würde JEDE
+// unauthentifizierte Anfrage auf jeden bis dahin unverarbeiteten Pfad mit
+// 302 statt dem JSON-404 beantworten (Fix-Runde 1, Task 8). Der Router wird
+// weiterhin OHNE Pfad-Präfix gemountet: createPageAuth baut die
 // next=-Redirect-Adresse aus req.path; ein Mount-Präfix (z. B.
 // app.use('/teamboard', ...)) würde Express das Präfix vor Erreichen der
 // Middleware abziehen lassen (next=%2F statt %2Fteamboard). Der Router
 // selbst definiert den vollen Pfad /teamboard (siehe routes/teamboard.ts).
-app.use(createPageAuth(sessions, '/app/'), createTeamboardPageRouter({
+app.use(createTeamboardPageRouter({
   ladeBoard: teamboardBoardLader,
   renderSeite,
+  pageAuth: createPageAuth(sessions, '/app/'),
 }));
 
 // ─── 404 Handler ─────────────────────────────────────────────────

@@ -20,9 +20,11 @@ const boardStandFixture: BoardStand = {
 };
 
 // ─── Test-App (Muster A, s. test/hub-routes.test.ts) ────────────────
-// Guard + Seiten-Router werden hier zusammengesteckt, so wie index.ts
-// (Task 8) es tun wird — mit injiziertem ladeBoard/renderSeite-Stub statt
-// dem echten renderSeite (existiert erst in Task 8).
+// Guard + Seiten-Router werden hier zusammengesteckt, so wie index.ts es
+// tut (Task 8, Fix-Runde 1): der Guard wird dem Router als Route-Middleware
+// (deps.pageAuth) übergeben und NUR auf GET /teamboard registriert, statt
+// global vorgeschaltet zu sein — mit injiziertem ladeBoard/renderSeite-Stub
+// statt dem echten renderSeite.
 
 function makeApp(opts: { ladeBoard?: BoardLader; renderSeite?: (stand: BoardStand) => string } = {}) {
   const db = openDb(':memory:');
@@ -35,7 +37,7 @@ function makeApp(opts: { ladeBoard?: BoardLader; renderSeite?: (stand: BoardStan
   const app = express();
   app.use(express.json());
   app.use(createAuthRouter({ users, sessions }));
-  app.use(createPageAuth(sessions, '/app/'), createTeamboardPageRouter({ ladeBoard, renderSeite }));
+  app.use(createTeamboardPageRouter({ ladeBoard, renderSeite, pageAuth: createPageAuth(sessions, '/app/') }));
 
   const member = users.create({ email: 'team@straightup-digital.de', name: 'Team', role: 'member', password: 'member-pass-123' });
   return { app, db, users, sessions, member };

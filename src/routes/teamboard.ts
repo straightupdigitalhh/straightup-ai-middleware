@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, RequestHandler } from 'express';
 import { getAuth, requireAdmin } from '../services/auth.js';
 import { clientErrorMessage } from '../services/errors.js';
 import type { BoardLader, BoardStand } from '../services/teamboard/daten.js';
@@ -248,8 +248,17 @@ export function createTeamboardRouter(deps: Deps): Router {
 
 // ─── Seite: GET /teamboard ─────────────────────────────────────────
 //
-// Muss HINTER createPageAuth (services/auth.ts) gemountet werden — dieser
-// Router selbst prüft keine Auth, er setzt nur res.locals.auth voraus.
+// Der Session-Guard (createPageAuth, services/auth.ts) wird als
+// Route-Middleware übergeben (deps.pageAuth) und NUR auf GET /teamboard
+// registriert — nicht global vorgeschaltet. Ein globales
+// `app.use(createPageAuth(...), router)` in index.ts würde JEDE
+// unauthentifizierte Anfrage auf jeden bis dahin unverarbeiteten Pfad
+// (auch echte 404-Fälle) mit 302 statt mit dem JSON-404 beantworten, weil
+// der Guard vor dem Routing des Routers läuft und keinen Pfad kennt
+// (Stufe-2-Fix-Runde 1, Task 8). Als Route-Middleware sieht createPageAuth
+// weiterhin unverändertes req.path ("/teamboard"), weil der Router selbst
+// ohne Pfad-Präfix gemountet wird (siehe index.ts) — die next=-Redirect-
+// Adresse bleibt damit korrekt.
 // Die 503-/500-HTML-Bodies sind 1:1 aus agents/teamboard/server.ts
 // (Stufe 1) übernommen, damit sich am Kaltstart-/Fehlerverhalten nichts
 // ändert.
@@ -257,6 +266,7 @@ export function createTeamboardRouter(deps: Deps): Router {
 interface PageDeps {
   ladeBoard: BoardLader;
   renderSeite: (stand: BoardStand) => string;
+  pageAuth: RequestHandler;
 }
 
 const KALTSTART_HTML =
@@ -266,7 +276,7 @@ const FEHLER_HTML = '<!doctype html><meta charset="utf-8"><title>Fehler</title><
 export function createTeamboardPageRouter(deps: PageDeps): Router {
   const router = Router();
 
-  router.get('/teamboard', async (_req: Request, res: Response) => {
+  router.get('/teamboard', deps.pageAuth, async (_req: Request, res: Response) => {
     try {
       let stand: BoardStand;
       try {
