@@ -98,6 +98,43 @@ describe("erstelleZeitenLader — Bucket-Regeln", () => {
     expect(zeiten["u2"]).toEqual({ heuteSekunden: 3600, vortagSekunden: 0, wocheSekunden: 3600 });
   });
 
+  it("zählt einen offenen Range-Eintrag NICHT zusätzlich zum laufenden Timer desselben Nutzers (Doppelzählung)", async () => {
+    // Der Zeiteintrag eines laufenden Timers steckt (mit seiner bislang
+    // live gepflegten duration) AUCH in getTimeEntriesForRange — die Range-
+    // Schleife muss ihn überspringen, sonst zählt "Heute" ihn doppelt
+    // (einmal roh aus der Range, einmal über timerAnzeige).
+    const abgeschlossen = eintrag("u1", "2026-08-26", 1800); // zählt normal
+    const offen: AworkTimeEntry = {
+      id: "e-u1-offen",
+      userId: "u1",
+      duration: 900, // von awork live mitgeführte Dauer des laufenden Timers
+      startDateLocal: "2026-08-26T09:00:00",
+      startTimeUtc: "09:00:00",
+      endTimeUtc: null,
+    };
+    const timer: LaufenderTimer = {
+      userId: "u1",
+      aufgabenName: null,
+      aufgabenKennung: null,
+      projektName: null,
+      projektId: null,
+      startUtc: "2026-08-26T09:00:00Z",
+      pausen: [],
+    };
+    const awork = fakeAwork([abgeschlossen, offen], [timer]);
+    const lade = erstelleZeitenLader({
+      awork,
+      ttlMs: 30_000,
+      jetztFn: () => new Date("2026-08-26T10:00:00Z"), // 1h nach Timer-Start
+    });
+
+    const zeiten = await lade();
+
+    // heute = abgeschlossener Eintrag (1800) + timerAnzeige-Sekunden (3600),
+    // der offene Range-Eintrag (900) darf NICHT zusätzlich einfließen.
+    expect(zeiten["u1"]).toEqual({ heuteSekunden: 5400, vortagSekunden: 0, wocheSekunden: 5400 });
+  });
+
   it("holt Einträge und laufende Timer je Zyklus getrennt (zwei awork-Reads, Plan-Ruling Nr. 6)", async () => {
     const awork = fakeAwork([eintrag("u1", "2026-08-26", 100)], []);
     const lade = erstelleZeitenLader({

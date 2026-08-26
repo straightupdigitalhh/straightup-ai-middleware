@@ -51,6 +51,13 @@ function baueZeitSummen(eingabe: {
 }): ZeitenProNutzer {
   const ergebnis: ZeitenProNutzer = {};
   for (const eintrag of eingabe.eintraege) {
+    // Laufende Timer überspringen — exakt die Laufend-Signatur aus
+    // getRunningTimers ("endTimeUtc eq null and startTimeUtc ne null").
+    // Der Zeiteintrag eines laufenden Timers steckt (mit seiner von awork
+    // live gepflegten duration) AUCH in getTimeEntriesForRange; ohne diesen
+    // Skip würde er hier UND über timerAnzeige (unten) doppelt gezählt.
+    // Manuell gebuchte Dauer-Einträge ohne startTimeUtc bleiben unberührt.
+    if (eintrag.endTimeUtc === null && eintrag.startTimeUtc) continue;
     const tag = String(eintrag.startDateLocal ?? "").slice(0, 10);
     const sekunden = eintrag.duration || 0;
     const summen = summenFuer(ergebnis, eintrag.userId);
