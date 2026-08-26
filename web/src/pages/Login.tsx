@@ -16,6 +16,13 @@ export default function LoginPage() {
     try {
       await api.login(email, password);
       await refresh();
+      const next = new URLSearchParams(window.location.search).get('next');
+      // Nur eigene, relative Pfade. ACHTUNG: location.assign parst Backslash in
+      // http(s)-URLs wie Slash (WHATWG) — "/\\evil.tld" wäre sonst ein Open Redirect.
+      if (next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\')) {
+        window.location.assign(next);
+        return;
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Verbindung fehlgeschlagen');
     } finally {

@@ -12,6 +12,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:3500',
       '/auth': 'http://localhost:3500',
+      '/teamboard': 'http://localhost:3500',
     },
   },
 });

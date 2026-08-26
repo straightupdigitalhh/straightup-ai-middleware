@@ -11,6 +11,7 @@ const navItems = [
 
 const externalTools = [
   { href: '/wissenssystem', label: 'Wissenssystem ↗' },
+  { href: '/teamboard', label: 'Teamboard ↗' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
