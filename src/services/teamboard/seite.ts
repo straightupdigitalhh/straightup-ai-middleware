@@ -450,9 +450,9 @@ export function renderSeite(stand: BoardStand): string {
       var bild = document.createElement("img");
       bild.className = "avatar";
       bild.alt = "";
-      // same-origin — der Browser schickt die bereits vorhandenen
-      // Basic-Auth-Credentials automatisch mit; der awork-Token bleibt
-      // serverseitig (Proxy-Route, siehe teamboard/server.ts).
+      // same-origin — der Browser schickt das Session-Cookie automatisch
+      // mit; der awork-Token bleibt serverseitig (Route siehe
+      // src/routes/teamboard.ts, GET /api/teamboard/avatar/:userId).
       bild.src = "/api/teamboard/avatar/" + lane.userId;
       bild.addEventListener("error", function () {
         var kreis = el("div", "avatar avatar-initialen", initialen(lane.name));

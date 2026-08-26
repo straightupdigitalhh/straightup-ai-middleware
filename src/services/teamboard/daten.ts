@@ -8,7 +8,12 @@ export interface BoardStand {
 
 export type BoardLader = () => Promise<BoardStand>;
 
-/** Berliner Kalendertag als "YYYY-MM-DD" — sv-SE formatiert genau so. */
+/**
+ * Berliner Kalendertag als "YYYY-MM-DD" — sv-SE formatiert genau so.
+ * Identische Semantik wie todayInBerlin (workdays.ts) — bewusst beim Port
+ * aus Stufe 1 dupliziert, nicht auf die Bestandsfunktion umgestellt
+ * (Port-Treue).
+ */
 export function heuteBerlin(jetzt: Date): string {
   return new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Europe/Berlin",
