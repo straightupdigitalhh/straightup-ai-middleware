@@ -135,6 +135,67 @@ export function wendeProjektFilterAn(lanes: Lane[], projektId: string | null): L
 }
 
 /**
+ * Wendet die persönlichen Einstellungen (Reihenfolge/Ausblenden) auf die
+ * Lanes an (Task 10). Läuft in zeichne() VOR wendeProjektFilterAn.
+ *
+ * reihenfolge === null ⇒ alphabetische Bestandsreihenfolge (nach lane.name,
+ * "de"). Sonst bestimmen die gelisteten awork-User-IDs die Reihenfolge der
+ * ersten Lanes; IDs ohne passende Lane werden ignoriert (keine Platzhalter);
+ * Lanes ohne Eintrag in reihenfolge landen dahinter, wieder alphabetisch.
+ * Ausgeblendete Lanes (per userId in e.ausgeblendet) fehlen komplett in
+ * "sichtbar", kommen aber vollständig in "ausgeblendet" zurück — die Seite
+ * braucht sie dort für den "N ausgeblendet"-Chip samt Namen.
+ */
+export function wendeEinstellungenAn(
+  lanes: Lane[],
+  e: { reihenfolge: string[] | null; ausgeblendet: string[] }
+): { sichtbar: Lane[]; ausgeblendet: Lane[] } {
+  var ausgeblendetKarte: Record<string, boolean> = {};
+  e.ausgeblendet.forEach(function (id) {
+    ausgeblendetKarte[id] = true;
+  });
+
+  var sichtbareLanes: Lane[] = [];
+  var ausgeblendeteLanes: Lane[] = [];
+  lanes.forEach(function (lane) {
+    if (ausgeblendetKarte[lane.userId]) {
+      ausgeblendeteLanes.push(lane);
+    } else {
+      sichtbareLanes.push(lane);
+    }
+  });
+
+  var alphabetisch = sichtbareLanes.slice().sort(function (a, b) {
+    return a.name.localeCompare(b.name, "de");
+  });
+
+  if (e.reihenfolge === null) {
+    return { sichtbar: alphabetisch, ausgeblendet: ausgeblendeteLanes };
+  }
+
+  var nachId: Record<string, Lane> = {};
+  sichtbareLanes.forEach(function (lane) {
+    nachId[lane.userId] = lane;
+  });
+  var verwendet: Record<string, boolean> = {};
+  var geordnet: Lane[] = [];
+  e.reihenfolge.forEach(function (id) {
+    var lane = nachId[id];
+    if (lane && !verwendet[id]) {
+      geordnet.push(lane);
+      verwendet[id] = true;
+    }
+  });
+  alphabetisch.forEach(function (lane) {
+    if (!verwendet[lane.userId]) {
+      geordnet.push(lane);
+    }
+  });
+
+  return { sichtbar: geordnet, ausgeblendet: ausgeblendeteLanes };
+}
+
+/**
  * Rendert das komplette HTML-Dokument. Nutzerdaten (Namen, Aufgabentitel)
  * stehen NUR im JSON-Datenblock — dort wird "<" zu <, damit ein
  * "</script>" in einem Aufgabennamen den Block nicht beenden kann. Das
@@ -187,6 +248,15 @@ export function renderSeite(stand: BoardStand): string {
   #zeiten-hinweis {
     display: none; margin: 0 20px; padding: 4px 0; color: var(--gedeckt); font-size: 12px;
   }
+  #ausgeblendet-liste {
+    display: none; margin: 0 20px 8px; padding: 8px 12px; border-radius: 8px;
+    background: var(--karte); border: 1px solid var(--linie); font-size: 13px;
+  }
+  .ausgeblendet-zeile { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
+  .einblenden-btn {
+    border: 0; background: none; color: var(--aktiv); font: inherit; font-size: 12px;
+    cursor: pointer; padding: 0; text-decoration: underline;
+  }
   .zeiten { color: var(--gedeckt); font-size: 12px; margin-top: 2px; }
   #lanes {
     display: flex; gap: 14px; padding: 12px 20px 24px; overflow-x: auto;
@@ -199,6 +269,10 @@ export function renderSeite(stand: BoardStand): string {
   .lane.aktiv { border-color: var(--aktiv); }
   .lane-kopf { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .lane-kopf h2 { margin: 0; font-size: 17px; }
+  .ausblenden-btn {
+    border: 0; background: none; color: var(--gedeckt); font: inherit; font-size: 16px;
+    line-height: 1; cursor: pointer; padding: 0 2px; margin-left: auto;
+  }
   .avatar {
     width: 36px; height: 36px; border-radius: 50%; flex: none;
     object-fit: cover; background: var(--chip);
@@ -247,9 +321,11 @@ export function renderSeite(stand: BoardStand): string {
   <span id="stand"></span>
   <select id="projekt-filter"></select>
   <span id="projekt-chip"></span>
+  <span id="ausgeblendet-chip"></span>
 </header>
 <div id="banner"></div>
 <div id="zeiten-hinweis"></div>
+<div id="ausgeblendet-liste"></div>
 <div id="lanes"></div>
 <script id="board-daten" type="application/json">${daten}</script>
 <script>
@@ -280,6 +356,18 @@ export function renderSeite(stand: BoardStand): string {
   // separaten /zeiten-Fetch befüllt, unabhängig vom Board-Stand.
   var zeitenProNutzer = {};
   var zeitenHinweis = null;
+  // Persönliche Einstellungen (Reihenfolge/Ausblenden, Task 10) — vom
+  // /einstellungen-Fetch beim Start befüllt, danach lokal bei jeder
+  // Drag-/Ausblenden-Aktion sofort weitergeschrieben und per PUT gesichert.
+  var einstellungen = { reihenfolge: null, ausgeblendet: [] };
+  // Ob die Ausgeblendet-Liste unter dem Chip gerade aufgeklappt ist —
+  // außerhalb von zeichne(), damit der 30-s-Neuaufbau sie nicht zuklappt.
+  var ausgeblendetOffen = false;
+  // Von der letzten zeichne()-Runde übrig: die sichtbaren Lanes VOR dem
+  // Projekt-Filter (Basis für die Drag-Neuordnung) und die ausgeblendeten
+  // Lanes (Basis für die Ausgeblendet-Liste im Chip).
+  var letzteSichtbareLanes = [];
+  var letzteAusgeblendeteLanes = [];
 
   function el(tag, klasse, text) {
     var e = document.createElement(tag);
@@ -310,6 +398,10 @@ export function renderSeite(stand: BoardStand): string {
 
   ${String(wendeProjektFilterAn)}
 
+  // Task 10: wendeEinstellungenAn ebenfalls oben als exportierte, testbare
+  // TS-Funktion definiert und hier eingebettet.
+  ${String(wendeEinstellungenAn)}
+
   function extraSekunden() {
     // Wie lange der empfangene Stand schon alt ist (Cache-Alter + Zeit seit Empfang).
     return stand.alterSekunden + (Date.now() - empfangenUm) / 1000;
@@ -321,11 +413,40 @@ export function renderSeite(stand: BoardStand): string {
     // Leeren würde scrollLeft sonst auf 0 zurückwerfen.
     var scrollLeft = wurzel.scrollLeft;
     wurzel.textContent = "";
-    // Erst den Projekt-Filter anwenden, dann zeichnen (Task 9).
-    var lanes = wendeProjektFilterAn(stand.board.lanes, ausgewaehltesProjekt);
+    // Erst die persönlichen Einstellungen (Reihenfolge/Ausblenden) anwenden,
+    // dann den Projekt-Filter, dann zeichnen (Task 10 — Anwendungsreihenfolge
+    // aus Task 9 fortgeführt).
+    var angewendet = wendeEinstellungenAn(stand.board.lanes, einstellungen);
+    letzteSichtbareLanes = angewendet.sichtbar;
+    letzteAusgeblendeteLanes = angewendet.ausgeblendet;
+    var lanes = wendeProjektFilterAn(angewendet.sichtbar, ausgewaehltesProjekt);
     lanes.forEach(function (lane) {
       var box = el("section", "lane" + (lane.timer && !lane.timer.pausiert ? " aktiv" : ""));
       var kopf = el("div", "lane-kopf");
+      // Ziehbar für die Drag-and-drop-Neuordnung (Task 10). "draggable" ist
+      // ein normales HTML-Attribut, kein Event-Handler-Attribut — von der
+      // CSP (script-src-attr 'none') nicht betroffen. Die drei Drag-Events
+      // selbst laufen ausschließlich über addEventListener, nie über
+      // inline onXxx-Attribute.
+      kopf.setAttribute("draggable", "true");
+      kopf.addEventListener("dragstart", function (ev) {
+        ev.dataTransfer.setData("text/plain", lane.userId);
+      });
+      kopf.addEventListener("dragover", function (ev) {
+        // Ohne preventDefault() erlaubt der Browser hier keinen Drop.
+        ev.preventDefault();
+      });
+      kopf.addEventListener("drop", function (ev) {
+        ev.preventDefault();
+        var gezogeneId = ev.dataTransfer.getData("text/plain");
+        if (!gezogeneId || gezogeneId === lane.userId) return;
+        einstellungen = {
+          reihenfolge: berechneNeueReihenfolge(gezogeneId, lane.userId),
+          ausgeblendet: einstellungen.ausgeblendet,
+        };
+        zeichne();
+        speichereEinstellungen();
+      });
       var bild = document.createElement("img");
       bild.className = "avatar";
       bild.alt = "";
@@ -339,6 +460,13 @@ export function renderSeite(stand: BoardStand): string {
       });
       kopf.appendChild(bild);
       kopf.appendChild(el("h2", null, lane.name));
+      var ausblenden = el("button", "ausblenden-btn", "×");
+      ausblenden.type = "button";
+      ausblenden.title = "Ausblenden";
+      ausblenden.addEventListener("click", function () {
+        blendeAus(lane.userId);
+      });
+      kopf.appendChild(ausblenden);
       box.appendChild(kopf);
       if (zeitenProNutzer[lane.userId]) {
         box.appendChild(el("div", "zeiten", zeitZeile(zeitenProNutzer[lane.userId])));
@@ -454,6 +582,41 @@ export function renderSeite(stand: BoardStand): string {
       });
       chipEl.appendChild(aufheben);
     }
+
+    // "N ausgeblendet"-Chip mit aufklappbarer Liste + "einblenden"-Buttons
+    // (Task 10) — beides per createElement gebaut, keine Inline-Handler.
+    var ausgeblendetChipEl = document.getElementById("ausgeblendet-chip");
+    ausgeblendetChipEl.textContent = "";
+    var ausgeblendetListeEl = document.getElementById("ausgeblendet-liste");
+    ausgeblendetListeEl.textContent = "";
+    if (letzteAusgeblendeteLanes.length === 0) {
+      ausgeblendetOffen = false;
+      ausgeblendetListeEl.style.display = "none";
+    } else {
+      var ausgeblendetBtn = el("button", "chip-aufheben", letzteAusgeblendeteLanes.length + " ausgeblendet");
+      ausgeblendetBtn.type = "button";
+      ausgeblendetBtn.addEventListener("click", function () {
+        ausgeblendetOffen = !ausgeblendetOffen;
+        aktualisiereKopf();
+      });
+      ausgeblendetChipEl.appendChild(ausgeblendetBtn);
+      if (ausgeblendetOffen) {
+        letzteAusgeblendeteLanes.forEach(function (verborgeneLane) {
+          var zeile = el("div", "ausgeblendet-zeile");
+          zeile.appendChild(el("span", null, verborgeneLane.name));
+          var einblenden = el("button", "einblenden-btn", "einblenden");
+          einblenden.type = "button";
+          einblenden.addEventListener("click", function () {
+            blendeEin(verborgeneLane.userId);
+          });
+          zeile.appendChild(einblenden);
+          ausgeblendetListeEl.appendChild(zeile);
+        });
+        ausgeblendetListeEl.style.display = "block";
+      } else {
+        ausgeblendetListeEl.style.display = "none";
+      }
+    }
   }
 
   function ticke() {
@@ -512,6 +675,84 @@ export function renderSeite(stand: BoardStand): string {
       });
   }
 
+  // ── Task 10: Persönliche Einstellungen (Reihenfolge/Ausblenden) ─────────
+  // Im Gegensatz zum Projekt-Filter (Task 9, nur Client-Variable) werden
+  // diese drei Funktionen serverseitig per PUT gesichert.
+
+  function ladeEinstellungen() {
+    fetch("/api/teamboard/einstellungen", { cache: "no-store" })
+      .then(function (res) {
+        if (res.status === 401) {
+          // Gleiche Behandlung wie bei Board/Zeiten: Session abgelaufen —
+          // sofort stoppen, sonst zählt jeder Versuch in die
+          // Brute-Force-Bremse (Karte Risiko 6).
+          location.reload();
+          return;
+        }
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json();
+      })
+      .then(function (antwort) {
+        if (!antwort) return;
+        einstellungen = antwort;
+        zeichne();
+      })
+      .catch(function (fehler) {
+        console.warn("teamboard: Einstellungen laden fehlgeschlagen", fehler);
+      });
+  }
+
+  function speichereEinstellungen() {
+    fetch("/api/teamboard/einstellungen", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(einstellungen),
+    })
+      .then(function (res) {
+        if (res.status === 401) {
+          location.reload();
+          return;
+        }
+        if (!res.ok) throw new Error(String(res.status));
+      })
+      .catch(function (fehler) {
+        console.warn("teamboard: Einstellungen speichern fehlgeschlagen", fehler);
+      });
+  }
+
+  /**
+   * Neue Reihenfolge nach einem Drop: die zuletzt gezeichneten sichtbaren
+   * Lanes (VOR dem Projekt-Filter — der darf die gespeicherte Reihenfolge
+   * nicht auf eine Teilmenge zusammenstauchen), die gezogene ID entfernt
+   * und direkt hinter der Ziel-ID wieder eingefügt.
+   */
+  function berechneNeueReihenfolge(gezogeneId, zielId) {
+    var aktuell = letzteSichtbareLanes.map(function (l) { return l.userId; });
+    var ohneGezogene = aktuell.filter(function (id) { return id !== gezogeneId; });
+    var zielIndex = ohneGezogene.indexOf(zielId);
+    if (zielIndex === -1) return aktuell;
+    return ohneGezogene.slice(0, zielIndex + 1).concat([gezogeneId], ohneGezogene.slice(zielIndex + 1));
+  }
+
+  function blendeAus(userId) {
+    if (einstellungen.ausgeblendet.indexOf(userId) !== -1) return;
+    einstellungen = {
+      reihenfolge: einstellungen.reihenfolge,
+      ausgeblendet: einstellungen.ausgeblendet.concat([userId]),
+    };
+    zeichne();
+    speichereEinstellungen();
+  }
+
+  function blendeEin(userId) {
+    einstellungen = {
+      reihenfolge: einstellungen.reihenfolge,
+      ausgeblendet: einstellungen.ausgeblendet.filter(function (id) { return id !== userId; }),
+    };
+    zeichne();
+    speichereEinstellungen();
+  }
+
   // Projekt-Filter-Auswahl: Änderung landet in der Client-Variable, kein
   // Speichern (Spec §6). Der Listener wird nur einmal gesetzt — die
   // <option>-Kinder werden bei jedem aktualisiereKopf() neu aufgebaut, das
@@ -524,6 +765,7 @@ export function renderSeite(stand: BoardStand): string {
   zeichne();
   ticke();
   ladeZeiten();
+  ladeEinstellungen();
   setInterval(ticke, 1000);
   setInterval(nachladen, 30000);
 })();

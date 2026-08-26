@@ -12,6 +12,7 @@ import {
   zeitZeile,
   projekteAusBoard,
   wendeProjektFilterAn,
+  wendeEinstellungenAn,
 } from "../src/services/teamboard/seite.js";
 import type { BoardStand } from "../src/services/teamboard/daten.js";
 import type { Board, Lane } from "../src/services/teamboard/board.js";
@@ -235,8 +236,14 @@ describe("renderSeite", () => {
     expect(html).toContain('projekteAusBoard(stand.board)');
     expect(html).toContain('document.createElement("option")');
     // Client-Variable statt sofortigem Speichern — kein fetch(...PUT.../einstellungen) o.ä. im Filter-Codepfad.
+    // (Task 10 verdrahtet /api/teamboard/einstellungen an anderer Stelle
+    // fürs Drag-and-drop/Ausblenden — der Projekt-Filter-Listener selbst
+    // bleibt davon unberührt, daher die Prüfung block-lokal statt global.)
     expect(html).toContain("var ausgewaehltesProjekt = null;");
-    expect(html).not.toContain("/api/teamboard/einstellungen");
+    const projektFilterListenerBlock = html
+      .split('document.getElementById("projekt-filter").addEventListener("change"')[1]
+      ?.split("});")[0];
+    expect(projektFilterListenerBlock).not.toContain("/api/teamboard/einstellungen");
   });
 
   it("zeigt den aktiven Filter als Chip mit 'Filter aufheben'-Button per addEventListener, keine Inline-Handler-Attribute (Task 9)", () => {
@@ -245,6 +252,72 @@ describe("renderSeite", () => {
     expect(html).toContain('id="projekt-chip"');
     // CSP: kein onclick=... im ausgelieferten HTML.
     expect(html).not.toMatch(/\son\w+\s*=/);
+  });
+
+  // ── Task 10: Persönliche Ansicht — Drag-and-drop, Ausblenden, Mapping-UI ──
+  // Wie bei Task 9: kein jsdom in dieser Suite, daher reine Text-Tripwires
+  // gegen den Quelltext des eingebetteten Client-Skripts.
+
+  it("lädt die Einstellungen beim Start per GET, mit derselben 401-Reload-Behandlung wie Board/Zeiten (Task 10)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain('fetch("/api/teamboard/einstellungen"');
+    const ladeEinstellungenBlock = html.split("function ladeEinstellungen()")[1]?.split("\n  }")[0];
+    expect(ladeEinstellungenBlock).toContain("res.status === 401");
+    expect(ladeEinstellungenBlock).toContain("location.reload();");
+    // Wird beim Boot aufgerufen, nicht erst bei einer Nutzeraktion.
+    expect(html).toContain("ladeEinstellungen();");
+  });
+
+  it("macht den Lane-Kopf per draggable=\"true\" ziehbar und verdrahtet dragstart/dragover/drop NUR per addEventListener (CSP script-src-attr 'none', Task 10)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain('kopf.setAttribute("draggable", "true")');
+    expect(html).toContain('addEventListener("dragstart"');
+    expect(html).toContain('addEventListener("dragover"');
+    expect(html).toContain('addEventListener("drop"');
+    // draggable ist erlaubt (kein Event-Handler-Attribut) — aber weiterhin
+    // keine echten Inline-Handler-Attribute (onclick=... o.ä.) im Dokument.
+    expect(html).not.toMatch(/\son\w+\s*=/);
+  });
+
+  it("speichert nach dem Drop die neue Reihenfolge per PUT und wendet sie lokal an (Task 10)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain('method: "PUT"');
+    const speichernBlock = html.split("function speichereEinstellungen()")[1]?.split("\n  }")[0];
+    expect(speichernBlock).toContain('fetch("/api/teamboard/einstellungen"');
+    expect(speichernBlock).toContain("res.status === 401");
+    expect(speichernBlock).toContain("location.reload();");
+    const dropBlock = html.split('addEventListener("drop"')[1]?.split("});")[0];
+    expect(dropBlock).toContain("ev.preventDefault();");
+  });
+
+  it("trägt je Lane-Kopf ein Ausblenden-Steuerelement (kleines ×), das die Lane in die Ausgeblendet-Liste verschiebt (Task 10)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain('el("button", "ausblenden-btn", "×")');
+    expect(html).toContain("function blendeAus(");
+  });
+
+  it("baut den 'N ausgeblendet'-Chip mit einer per createElement erzeugten Liste samt 'einblenden'-Buttons (Task 10)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain('id="ausgeblendet-chip"');
+    expect(html).toContain('id="ausgeblendet-liste"');
+    expect(html).toContain("ausgeblendet");
+    expect(html).toContain('el("button", "einblenden-btn", "einblenden")');
+    expect(html).toContain("function blendeEin(");
+    // Kein innerHTML irgendwo im Dokument (Client-Skript baut alles per DOM-API).
+    expect(html).not.toMatch(/\.innerHTML\s*=/);
+  });
+
+  it("wendet in zeichne() erst wendeEinstellungenAn und danach wendeProjektFilterAn an, bevor gezeichnet wird (Task 10)", () => {
+    const html = renderSeite(stand());
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    const einstellungenPos = zeichneBlock!.indexOf("wendeEinstellungenAn(");
+    const filterPos = zeichneBlock!.indexOf("wendeProjektFilterAn(");
+    const forEachPos = zeichneBlock!.indexOf(".forEach(function (lane)");
+    expect(einstellungenPos).toBeGreaterThan(-1);
+    expect(filterPos).toBeGreaterThan(-1);
+    expect(forEachPos).toBeGreaterThan(-1);
+    expect(einstellungenPos).toBeLessThan(filterPos);
+    expect(filterPos).toBeLessThan(forEachPos);
   });
 });
 
@@ -442,6 +515,74 @@ describe("wendeProjektFilterAn (P1 — Projekt-Filter auf die Lanes, Task 9)", (
   });
 });
 
+function lane(teile: Partial<Lane>): Lane {
+  return { userId: "u-x", name: "X", timer: null, aufgaben: [], ...teile };
+}
+
+describe("wendeEinstellungenAn (P1 — Reihenfolge/Ausblenden der Lanes, Task 10)", () => {
+  it("Default: reihenfolge null ⇒ alphabetische Bestandsreihenfolge, keine ausgeblendeten Lanes", () => {
+    const lanes = [lane({ userId: "u-2", name: "Zora" }), lane({ userId: "u-1", name: "Anna" })];
+    const ergebnis = wendeEinstellungenAn(lanes, { reihenfolge: null, ausgeblendet: [] });
+    expect(ergebnis.sichtbar.map((l) => l.userId)).toEqual(["u-1", "u-2"]);
+    expect(ergebnis.ausgeblendet).toEqual([]);
+  });
+
+  it("Teil-Reihenfolge: die gelisteten IDs bestimmen die Reihenfolge der ersten Lanes", () => {
+    const lanes = [
+      lane({ userId: "u-1", name: "Anna" }),
+      lane({ userId: "u-2", name: "Bea" }),
+      lane({ userId: "u-3", name: "Cora" }),
+    ];
+    const ergebnis = wendeEinstellungenAn(lanes, { reihenfolge: ["u-3", "u-1"], ausgeblendet: [] });
+    // u-3 und u-1 in der vorgegebenen Reihenfolge zuerst, u-2 (ohne Eintrag) alphabetisch dahinter.
+    expect(ergebnis.sichtbar.map((l) => l.userId)).toEqual(["u-3", "u-1", "u-2"]);
+  });
+
+  it("unbekannte IDs in der Reihenfolge werden ignoriert (keine Platzhalter, keine Fehler)", () => {
+    const lanes = [lane({ userId: "u-1", name: "Anna" }), lane({ userId: "u-2", name: "Bea" })];
+    const ergebnis = wendeEinstellungenAn(lanes, {
+      reihenfolge: ["u-nicht-mehr-da", "u-2", "u-auch-unbekannt"],
+      ausgeblendet: [],
+    });
+    expect(ergebnis.sichtbar.map((l) => l.userId)).toEqual(["u-2", "u-1"]);
+  });
+
+  it("neue Nutzer ohne Eintrag in der Reihenfolge landen hinten, alphabetisch sortiert", () => {
+    const lanes = [
+      lane({ userId: "u-1", name: "Anna" }),
+      lane({ userId: "u-2", name: "Zora" }),
+      lane({ userId: "u-3", name: "Mona" }),
+    ];
+    const ergebnis = wendeEinstellungenAn(lanes, { reihenfolge: ["u-1"], ausgeblendet: [] });
+    // u-1 zuerst (Eintrag), dann die beiden ohne Eintrag alphabetisch: Mona vor Zora.
+    expect(ergebnis.sichtbar.map((l) => l.userId)).toEqual(["u-1", "u-3", "u-2"]);
+  });
+
+  it("ausgeblendete Lanes fehlen in 'sichtbar', kommen aber vollständig in 'ausgeblendet' zurück (für den Chip)", () => {
+    const lanes = [
+      lane({ userId: "u-1", name: "Anna" }),
+      lane({ userId: "u-2", name: "Bea" }),
+      lane({ userId: "u-3", name: "Cora" }),
+    ];
+    const ergebnis = wendeEinstellungenAn(lanes, { reihenfolge: null, ausgeblendet: ["u-2"] });
+    expect(ergebnis.sichtbar.map((l) => l.userId)).toEqual(["u-1", "u-3"]);
+    expect(ergebnis.ausgeblendet.map((l) => l.userId)).toEqual(["u-2"]);
+  });
+
+  it("eine in der Reihenfolge genannte, aber ausgeblendete ID taucht nirgends in 'sichtbar' auf", () => {
+    const lanes = [lane({ userId: "u-1", name: "Anna" }), lane({ userId: "u-2", name: "Bea" })];
+    const ergebnis = wendeEinstellungenAn(lanes, { reihenfolge: ["u-2", "u-1"], ausgeblendet: ["u-2"] });
+    expect(ergebnis.sichtbar.map((l) => l.userId)).toEqual(["u-1"]);
+    expect(ergebnis.ausgeblendet.map((l) => l.userId)).toEqual(["u-2"]);
+  });
+
+  it("keine Lanes ⇒ beide Listen leer", () => {
+    const ergebnis = wendeEinstellungenAn([], { reihenfolge: null, ausgeblendet: [] });
+    expect(ergebnis.sichtbar).toEqual([]);
+    expect(ergebnis.ausgeblendet).toEqual([]);
+  });
+});
+
 describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
   it("enthält die Funktionsquelltexte von uhrText, datumKurz, bannerText und initialen (Einbettung nicht verloren)", () => {
     const html = renderSeite(stand());
@@ -467,6 +608,13 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
     expect(html).not.toContain("__name(");
     // </script>-Zähler bleibt bei 2 (Daten-Skript + Client-Skript) — die
     // zusätzliche Einbettung darf keinen dritten Script-Block erzeugen.
+    expect(html.split("</script>").length - 1).toBe(2);
+  });
+
+  it("enthält auch wendeEinstellungenAn (Task 10), weiterhin ohne __name( und ohne dritten Script-Block", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain("function wendeEinstellungenAn(");
+    expect(html).not.toContain("__name(");
     expect(html.split("</script>").length - 1).toBe(2);
   });
 });

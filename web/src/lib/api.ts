@@ -7,6 +7,7 @@ export interface User {
   role: 'admin' | 'member';
   disabledAt: string | null;
   createdAt: string;
+  aworkUserId: string | null;
 }
 
 export interface AutomationStatus {
@@ -37,6 +38,11 @@ export interface TimetrackingUser {
   id: string;
   name: string;
   email: string | null;
+}
+
+export interface TeamboardNutzer {
+  id: string;
+  name: string;
 }
 
 export interface FeedbackKey {
@@ -113,11 +119,15 @@ export const api = {
   users: () => request<User[]>('/api/users'),
   createUser: (input: { email: string; name: string; role: 'admin' | 'member'; password: string }) =>
     request<User>('/api/users', { method: 'POST', body: JSON.stringify(input) }),
-  patchUser: (id: string, patch: { role?: 'admin' | 'member'; disabled?: boolean; password?: string }) =>
+  patchUser: (id: string, patch: { role?: 'admin' | 'member'; disabled?: boolean; password?: string; aworkUserId?: string | null }) =>
     request<User>(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 
   // Zeiterfassung – Empfänger-Auswahl
   timetrackingUsers: () => request<TimetrackingUser[]>('/api/timetracking/users'),
+
+  // Teamboard – Nutzerliste fürs awork-Mapping (deckungsgleich mit den
+  // Board-Lanes, NICHT dieselbe Quelle wie timetrackingUsers)
+  teamboardNutzer: () => request<TeamboardNutzer[]>('/api/teamboard/nutzer'),
 
   // BugBee – Feedback-Verbindungen
   feedbackKeys: () => request<FeedbackKey[]>('/api/feedback-keys'),

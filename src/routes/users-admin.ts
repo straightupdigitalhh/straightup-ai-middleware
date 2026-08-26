@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { UserStore } from '../core/users.js';
 import { SessionStore } from '../core/sessions.js';
 import { getAuth, requireAdmin } from '../services/auth.js';
+import { UserFacingError, clientErrorMessage } from '../services/errors.js';
 
 interface Deps {
   users: UserStore;
@@ -9,6 +10,10 @@ interface Deps {
 }
 
 const MIN_PASSWORD_LENGTH = 10;
+// Dieselbe UUID-Form wie AVATAR_ID_MUSTER in routes/teamboard.ts (awork-
+// User-IDs sind UUIDs) — hier lokal, kein gemeinsames Modul für eine
+// einzelne Regex-Konstante.
+const AWORK_USER_ID_MUSTER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * Nutzerverwaltung (nur Admins). Läuft unter /api/* hinter der API-Auth.
@@ -59,7 +64,7 @@ export function createUsersAdminRouter({ users, sessions }: Deps): Router {
 
     // Selbst-Aussperrung verhindern: eigene Rolle/Aktivierung nicht änderbar
     const auth = getAuth(res);
-    const { role, disabled, password } = req.body ?? {};
+    const { role, disabled, password, aworkUserId } = req.body ?? {};
     if (auth?.user?.id === id && (role !== undefined || disabled !== undefined)) {
       res.status(400).json({ error: 'validation', message: 'Eigene Rolle/Aktivierung kann nicht geändert werden' });
       return;
@@ -90,6 +95,20 @@ export function createUsersAdminRouter({ users, sessions }: Deps): Router {
         sessions.deleteForUser(id);
       } else {
         users.enable(id);
+      }
+    }
+    if (aworkUserId !== undefined) {
+      if (aworkUserId !== null && (typeof aworkUserId !== 'string' || !AWORK_USER_ID_MUSTER.test(aworkUserId))) {
+        res.status(400).json({ error: 'validation', message: 'aworkUserId muss eine gültige UUID oder null sein' });
+        return;
+      }
+      try {
+        users.setAworkUserId(id, aworkUserId);
+      } catch {
+        // UNIQUE-Verletzung: die awork-ID hängt schon an einem anderen Nutzer.
+        const fehler = new UserFacingError('Diese awork-ID ist bereits einem anderen Nutzer zugeordnet');
+        res.status(409).json({ error: 'conflict', message: clientErrorMessage(fehler) });
+        return;
       }
     }
 
