@@ -1,4 +1,5 @@
 import type { BoardStand } from "./daten.js";
+import type { Board, Lane } from "./board.js";
 
 /**
  * Reine Client-Funktionen (P1): als exportierte TS-Funktionen definiert,
@@ -51,6 +52,89 @@ export function initialen(name: string): string {
 }
 
 /**
+ * P1-Muster fortgeführt (Task 9): H:MM ohne führende Nullen bei den Stunden,
+ * Minuten immer zweistellig, Sekunden abgeschnitten statt gerundet — 59 s
+ * ⇒ "0:00", genau wie die volle Sekundenanzeige in uhrText.
+ */
+export function formatiereZeit(sekunden: number): string {
+  if (!Number.isFinite(sekunden) || sekunden < 0) return "";
+  var minuten = Math.floor(sekunden / 60);
+  var h = Math.floor(minuten / 60), m = minuten % 60;
+  return h + ":" + String(m).padStart(2, "0");
+}
+
+/**
+ * "Heute 1:02 · Vortag 7:45 · Woche 21:03" — Zeitsummen-Zeile unter dem
+ * Lane-Namen (Task 9). Ruft formatiereZeit als Geschwister-Funktion auf
+ * derselben Einbettungsebene auf — keine Closure, beide Funktionen landen
+ * über String(fn) im selben Client-Skript-Scope.
+ */
+export function zeitZeile(z: { heuteSekunden: number; vortagSekunden: number; wocheSekunden: number }): string {
+  return (
+    "Heute " + formatiereZeit(z.heuteSekunden) +
+    " · Vortag " + formatiereZeit(z.vortagSekunden) +
+    " · Woche " + formatiereZeit(z.wocheSekunden)
+  );
+}
+
+/**
+ * Distinct-Projektliste aus allen Timern und Aufgaben des Boards,
+ * alphabetisch sortiert (de) — füllt den Projekt-Filter im Kopfbereich
+ * (Task 9). Karten ohne Projekt (projektId null) bleiben außen vor.
+ */
+export function projekteAusBoard(board: Board): { id: string; name: string }[] {
+  var karte: Record<string, string> = {};
+  board.lanes.forEach(function (lane) {
+    if (lane.timer && lane.timer.projektId) {
+      karte[lane.timer.projektId] = lane.timer.projektName || lane.timer.projektId;
+    }
+    lane.aufgaben.forEach(function (aufgabe) {
+      if (aufgabe.projektId) {
+        karte[aufgabe.projektId] = aufgabe.projektName || aufgabe.projektId;
+      }
+    });
+  });
+  var liste: { id: string; name: string }[] = [];
+  for (var id in karte) {
+    if (Object.prototype.hasOwnProperty.call(karte, id)) {
+      liste.push({ id: id, name: karte[id] });
+    }
+  }
+  liste.sort(function (a, b) {
+    return a.name.localeCompare(b.name, "de");
+  });
+  return liste;
+}
+
+/**
+ * Wendet den Projekt-Filter auf die Lanes an (Task 9): projektId null lässt
+ * die Lanes unverändert (dieselbe Referenz zurück). Sonst bleibt eine Lane
+ * nur, wenn ihr Timer im gewählten Projekt läuft ODER mindestens eine
+ * Aufgabe darin liegt; die Aufgabenliste wird auf das Projekt gefiltert, die
+ * Timer-Karte nur behalten, wenn ihr eigenes Projekt zum Filter passt (sonst
+ * timer: null — ein Timer in einem fremden Projekt verschwindet auch dann,
+ * wenn die Lane wegen einer passenden Aufgabe bleibt).
+ */
+export function wendeProjektFilterAn(lanes: Lane[], projektId: string | null): Lane[] {
+  if (projektId === null) return lanes;
+  var ergebnis: Lane[] = [];
+  lanes.forEach(function (lane) {
+    var timerPasst = lane.timer !== null && lane.timer.projektId === projektId;
+    var gefilterteAufgaben = lane.aufgaben.filter(function (a) {
+      return a.projektId === projektId;
+    });
+    if (!timerPasst && gefilterteAufgaben.length === 0) return;
+    ergebnis.push({
+      userId: lane.userId,
+      name: lane.name,
+      timer: timerPasst ? lane.timer : null,
+      aufgaben: gefilterteAufgaben,
+    });
+  });
+  return ergebnis;
+}
+
+/**
  * Rendert das komplette HTML-Dokument. Nutzerdaten (Namen, Aufgabentitel)
  * stehen NUR im JSON-Datenblock — dort wird "<" zu <, damit ein
  * "</script>" in einem Aufgabennamen den Block nicht beenden kann. Das
@@ -88,10 +172,22 @@ export function renderSeite(stand: BoardStand): string {
   }
   header h1 { margin: 0; font-size: 18px; letter-spacing: .2px; }
   #stand { color: var(--gedeckt); font-size: 13px; }
+  #projekt-filter {
+    font: inherit; font-size: 13px; color: var(--tinte); background: var(--karte);
+    border: 1px solid var(--linie); border-radius: 6px; padding: 2px 6px;
+  }
+  .chip-aufheben {
+    border: 0; background: none; color: var(--gedeckt); font: inherit; font-size: 11px;
+    cursor: pointer; padding: 0; margin-left: 4px; text-decoration: underline;
+  }
   #banner {
     display: none; margin: 0 20px; padding: 8px 12px; border-radius: 8px;
     background: var(--warn); color: #fff; font-size: 13px;
   }
+  #zeiten-hinweis {
+    display: none; margin: 0 20px; padding: 4px 0; color: var(--gedeckt); font-size: 12px;
+  }
+  .zeiten { color: var(--gedeckt); font-size: 12px; margin-top: 2px; }
   #lanes {
     display: flex; gap: 14px; padding: 12px 20px 24px; overflow-x: auto;
     align-items: flex-start;
@@ -146,8 +242,14 @@ export function renderSeite(stand: BoardStand): string {
   .leer { color: var(--gedeckt); font-size: 13px; font-style: italic; }
 </style>
 <body>
-<header><h1>Teamboard</h1><span id="stand"></span></header>
+<header>
+  <h1>Teamboard</h1>
+  <span id="stand"></span>
+  <select id="projekt-filter"></select>
+  <span id="projekt-chip"></span>
+</header>
 <div id="banner"></div>
+<div id="zeiten-hinweis"></div>
 <div id="lanes"></div>
 <script id="board-daten" type="application/json">${daten}</script>
 <script>
@@ -170,6 +272,14 @@ export function renderSeite(stand: BoardStand): string {
   // Lane-IDs mit aufgeklapptem "+n weitere" — außerhalb von zeichne(), damit
   // der alle 30s komplette Neuaufbau sie nicht vergisst.
   var aufgeklappteLanes = new Set();
+  // Projekt-Filter-Auswahl (Task 9) — ebenfalls außerhalb von zeichne(),
+  // überlebt den 30-s-Refresh wie Scroll/Aufklappen. Wird NICHT gespeichert
+  // (Spec §6) — reine Client-Variable.
+  var ausgewaehltesProjekt = null;
+  // Zuletzt geladene Zeitsummen je awork-userId + Hinweis (Task 9) — vom
+  // separaten /zeiten-Fetch befüllt, unabhängig vom Board-Stand.
+  var zeitenProNutzer = {};
+  var zeitenHinweis = null;
 
   function el(tag, klasse, text) {
     var e = document.createElement(tag);
@@ -189,6 +299,17 @@ export function renderSeite(stand: BoardStand): string {
 
   ${String(initialen)}
 
+  // P1 fortgeführt (Task 9): formatiereZeit/zeitZeile/projekteAusBoard/
+  // wendeProjektFilterAn sind oben ebenfalls als exportierte, testbare
+  // TS-Funktionen definiert und werden hier eingebettet.
+  ${String(formatiereZeit)}
+
+  ${String(zeitZeile)}
+
+  ${String(projekteAusBoard)}
+
+  ${String(wendeProjektFilterAn)}
+
   function extraSekunden() {
     // Wie lange der empfangene Stand schon alt ist (Cache-Alter + Zeit seit Empfang).
     return stand.alterSekunden + (Date.now() - empfangenUm) / 1000;
@@ -200,7 +321,9 @@ export function renderSeite(stand: BoardStand): string {
     // Leeren würde scrollLeft sonst auf 0 zurückwerfen.
     var scrollLeft = wurzel.scrollLeft;
     wurzel.textContent = "";
-    stand.board.lanes.forEach(function (lane) {
+    // Erst den Projekt-Filter anwenden, dann zeichnen (Task 9).
+    var lanes = wendeProjektFilterAn(stand.board.lanes, ausgewaehltesProjekt);
+    lanes.forEach(function (lane) {
       var box = el("section", "lane" + (lane.timer && !lane.timer.pausiert ? " aktiv" : ""));
       var kopf = el("div", "lane-kopf");
       var bild = document.createElement("img");
@@ -217,6 +340,9 @@ export function renderSeite(stand: BoardStand): string {
       kopf.appendChild(bild);
       kopf.appendChild(el("h2", null, lane.name));
       box.appendChild(kopf);
+      if (zeitenProNutzer[lane.userId]) {
+        box.appendChild(el("div", "zeiten", zeitZeile(zeitenProNutzer[lane.userId])));
+      }
       if (lane.timer) {
         var t = el("div", "timer" + (lane.timer.pausiert ? " pausiert" : ""));
         var uhr = el("div", "uhr");
@@ -285,6 +411,49 @@ export function renderSeite(stand: BoardStand): string {
     var zeit = new Date(Date.parse(stand.board.stand));
     document.getElementById("stand").textContent =
       "Stand " + zeit.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) + " Uhr";
+
+    // Hinweis auf fehlendes awork-Mapping — dezent, einmal im Kopfbereich,
+    // kein Wiederholen pro Lane (Spec §5, Task 9).
+    var hinweisEl = document.getElementById("zeiten-hinweis");
+    if (zeitenHinweis === "kein_mapping") {
+      hinweisEl.style.display = "block";
+      hinweisEl.textContent =
+        "Zeiten: kein awork-Mapping hinterlegt — ein Admin kann es in der Nutzerverwaltung verknüpfen";
+    } else {
+      hinweisEl.style.display = "none";
+    }
+
+    // Projekt-Filter neu befüllen (Task 9) — Board-Projekte können sich mit
+    // jedem Nachladen ändern; die Auswahl selbst bleibt in
+    // ausgewaehltesProjekt erhalten (Client-Variable, kein Speichern).
+    var projekte = projekteAusBoard(stand.board);
+    var filterSelect = document.getElementById("projekt-filter");
+    filterSelect.textContent = "";
+    var alleOption = document.createElement("option");
+    alleOption.value = "";
+    alleOption.textContent = "Alle Projekte";
+    filterSelect.appendChild(alleOption);
+    projekte.forEach(function (p) {
+      var option = document.createElement("option");
+      option.value = p.id;
+      option.textContent = p.name;
+      filterSelect.appendChild(option);
+    });
+    filterSelect.value = ausgewaehltesProjekt || "";
+
+    // Aktiver Filter als Chip mit "Filter aufheben"-Button.
+    var chipEl = document.getElementById("projekt-chip");
+    chipEl.textContent = "";
+    if (ausgewaehltesProjekt !== null) {
+      var gefunden = projekte.find(function (p) { return p.id === ausgewaehltesProjekt; });
+      chipEl.appendChild(el("span", "chip", gefunden ? gefunden.name : ausgewaehltesProjekt));
+      var aufheben = el("button", "chip-aufheben", "Filter aufheben");
+      aufheben.addEventListener("click", function () {
+        ausgewaehltesProjekt = null;
+        zeichne();
+      });
+      chipEl.appendChild(aufheben);
+    }
   }
 
   function ticke() {
@@ -311,7 +480,7 @@ export function renderSeite(stand: BoardStand): string {
       })
       .then(function (neu) {
         if (!neu) return;
-        stand = neu; empfangenUm = Date.now(); zeichne(); ticke();
+        stand = neu; empfangenUm = Date.now(); zeichne(); ticke(); ladeZeiten();
       })
       .catch(function (fehler) {
         console.warn("teamboard: Nachladen fehlgeschlagen", fehler);
@@ -319,8 +488,42 @@ export function renderSeite(stand: BoardStand): string {
       });
   }
 
+  function ladeZeiten() {
+    fetch("/api/teamboard/zeiten", { cache: "no-store" })
+      .then(function (res) {
+        if (res.status === 401) {
+          // Gleiche Behandlung wie beim Board-Fetch (nachladen): Session
+          // abgelaufen — sofort stoppen, sonst zählt jeder 30-s-Poll in die
+          // Brute-Force-Bremse (Karte Risiko 6).
+          location.reload();
+          return;
+        }
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json();
+      })
+      .then(function (antwort) {
+        if (!antwort) return;
+        zeitenProNutzer = antwort.zeiten;
+        zeitenHinweis = antwort.hinweis;
+        zeichne();
+      })
+      .catch(function (fehler) {
+        console.warn("teamboard: Zeiten laden fehlgeschlagen", fehler);
+      });
+  }
+
+  // Projekt-Filter-Auswahl: Änderung landet in der Client-Variable, kein
+  // Speichern (Spec §6). Der Listener wird nur einmal gesetzt — die
+  // <option>-Kinder werden bei jedem aktualisiereKopf() neu aufgebaut, das
+  // <select>-Element selbst bleibt dabei erhalten.
+  document.getElementById("projekt-filter").addEventListener("change", function (ev) {
+    ausgewaehltesProjekt = ev.target.value || null;
+    zeichne();
+  });
+
   zeichne();
   ticke();
+  ladeZeiten();
   setInterval(ticke, 1000);
   setInterval(nachladen, 30000);
 })();

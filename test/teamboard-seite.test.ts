@@ -2,8 +2,19 @@ import { describe, it, expect } from "vitest";
 import express from "express";
 import helmet from "helmet";
 import request from "supertest";
-import { renderSeite, uhrText, datumKurz, bannerText, initialen } from "../src/services/teamboard/seite.js";
+import {
+  renderSeite,
+  uhrText,
+  datumKurz,
+  bannerText,
+  initialen,
+  formatiereZeit,
+  zeitZeile,
+  projekteAusBoard,
+  wendeProjektFilterAn,
+} from "../src/services/teamboard/seite.js";
 import type { BoardStand } from "../src/services/teamboard/daten.js";
+import type { Board, Lane } from "../src/services/teamboard/board.js";
 import { openDb } from "../src/core/db.js";
 import { UserStore } from "../src/core/users.js";
 import { SessionStore } from "../src/core/sessions.js";
@@ -173,6 +184,68 @@ describe("renderSeite", () => {
     expect(nachladenBlock).toContain("res.status === 401");
     expect(nachladenBlock).toContain("location.reload();");
   });
+
+  // Die folgenden Tests sind — wie oben bereits vermerkt — reine Text-
+  // Tripwires (kein jsdom in dieser Suite), kein Beleg für das tatsächliche
+  // Laufzeitverhalten im Browser.
+
+  it("lädt nach jedem Zeichen-Zyklus (Start + 30-s-Nachladen) zusätzlich die Zeitsummen, mit derselben 401-Reload-Behandlung wie beim Board-Fetch (Task 9)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain('fetch("/api/teamboard/zeiten"');
+    const ladeZeitenBlock = html.split("function ladeZeiten()")[1]?.split("\n  }")[0];
+    expect(ladeZeitenBlock).toContain("res.status === 401");
+    expect(ladeZeitenBlock).toContain("location.reload();");
+    // Nach beiden zeichne()-Zyklen aufgerufen: initial und im 30-s-Nachladen.
+    expect(html).toContain("zeichne(); ticke(); ladeZeiten();");
+    const nachladenBlock = html.split("function nachladen()")[1]?.split("\n  }")[0];
+    expect(nachladenBlock).toContain("zeichne(); ticke(); ladeZeiten();");
+  });
+
+  it("rendert die Zeitsummen-Zeile unter dem Namen nur für gelieferte IDs (Task 9)", () => {
+    const html = renderSeite(stand());
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    expect(zeichneBlock).toContain('el("div", "zeiten", zeitZeile(');
+    // Guard: nur rendern, wenn für diese userId tatsächlich Zeiten geliefert wurden.
+    expect(zeichneBlock).toContain("zeitenProNutzer[lane.userId]");
+  });
+
+  it("wendet in zeichne() erst den Projekt-Filter an und zeichnet danach (Task 9)", () => {
+    const html = renderSeite(stand());
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    const filterPos = zeichneBlock!.indexOf("wendeProjektFilterAn(");
+    const forEachPos = zeichneBlock!.indexOf(".forEach(function (lane)");
+    expect(filterPos).toBeGreaterThan(-1);
+    expect(forEachPos).toBeGreaterThan(-1);
+    expect(filterPos).toBeLessThan(forEachPos);
+  });
+
+  it("zeigt bei hinweis === 'kein_mapping' einmal im Kopfbereich den dezenten Hinweistext auf fehlendes awork-Mapping (Spec §5, Task 9)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain(
+      "Zeiten: kein awork-Mapping hinterlegt — ein Admin kann es in der Nutzerverwaltung verknüpfen"
+    );
+    // Nur einmal im Dokument — kein Wiederholen pro Lane.
+    const vorkommen = html.split("kein awork-Mapping hinterlegt").length - 1;
+    expect(vorkommen).toBe(1);
+  });
+
+  it("baut den Projekt-Filter als <select> im Kopfbereich per createElement aus projekteAusBoard, Auswahl in Client-Variable ohne Speichern (Task 9, Spec §6)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain('id="projekt-filter"');
+    expect(html).toContain('projekteAusBoard(stand.board)');
+    expect(html).toContain('document.createElement("option")');
+    // Client-Variable statt sofortigem Speichern — kein fetch(...PUT.../einstellungen) o.ä. im Filter-Codepfad.
+    expect(html).toContain("var ausgewaehltesProjekt = null;");
+    expect(html).not.toContain("/api/teamboard/einstellungen");
+  });
+
+  it("zeigt den aktiven Filter als Chip mit 'Filter aufheben'-Button per addEventListener, keine Inline-Handler-Attribute (Task 9)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain("Filter aufheben");
+    expect(html).toContain('id="projekt-chip"');
+    // CSP: kein onclick=... im ausgelieferten HTML.
+    expect(html).not.toMatch(/\son\w+\s*=/);
+  });
 });
 
 describe("uhrText (P1 — reine Funktion, die auch im Client-Skript läuft)", () => {
@@ -231,6 +304,144 @@ describe("initialen (P1 — Avatar-Fallback bei Ladefehler)", () => {
   });
 });
 
+describe("formatiereZeit (P1 — H:MM ohne Sekunden, für die Zeitsummen-Zeile, Task 9)", () => {
+  it("formatiert H:MM an den Grenzen (0s, 59s, 60s, 3599s, 3600s, 3720s)", () => {
+    expect(formatiereZeit(0)).toBe("0:00");
+    expect(formatiereZeit(59)).toBe("0:00");
+    expect(formatiereZeit(60)).toBe("0:01");
+    expect(formatiereZeit(3599)).toBe("0:59");
+    expect(formatiereZeit(3600)).toBe("1:00");
+    expect(formatiereZeit(3720)).toBe("1:02");
+  });
+
+  it("liefert eine leere Zeichenkette statt 'NaN:NaN' bei ungültiger oder negativer Eingabe", () => {
+    expect(formatiereZeit(NaN)).toBe("");
+    expect(formatiereZeit(-1)).toBe("");
+  });
+});
+
+describe("zeitZeile (P1 — Task 9)", () => {
+  it("baut 'Heute H:MM · Vortag H:MM · Woche H:MM' aus den drei Zeitsummen", () => {
+    expect(
+      zeitZeile({ heuteSekunden: 3720, vortagSekunden: 27900, wocheSekunden: 75780 })
+    ).toBe("Heute 1:02 · Vortag 7:45 · Woche 21:03");
+  });
+});
+
+// ─── Fixtures für projekteAusBoard/wendeProjektFilterAn (Task 9) ───────────
+
+function aufgabeKarte(teile: Partial<Lane["aufgaben"][number]>): Lane["aufgaben"][number] {
+  return {
+    id: "a-1",
+    name: "Aufgabe",
+    kennung: null,
+    projektName: null,
+    projektId: null,
+    statusName: "Offen",
+    statusTyp: "todo",
+    faelligAm: null,
+    istPrio: false,
+    ueberfaellig: false,
+    ...teile,
+  };
+}
+
+function timerKarte(teile: Partial<NonNullable<Lane["timer"]>>): NonNullable<Lane["timer"]> {
+  return {
+    aufgabenName: "Timer-Aufgabe",
+    aufgabenKennung: null,
+    projektName: null,
+    projektId: null,
+    sekunden: 60,
+    pausiert: false,
+    ...teile,
+  };
+}
+
+describe("projekteAusBoard (P1 — Projekt-Filter-Liste, Task 9)", () => {
+  it("sammelt distinct Projekte aus Timern und Aufgaben, alphabetisch sortiert", () => {
+    const board: Board = {
+      stand: "2026-08-26T10:00:00.000Z",
+      lanes: [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: timerKarte({ projektId: "p-zwo", projektName: "Zweites Projekt" }),
+          aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-eins", projektName: "Erstes Projekt" })],
+        },
+        {
+          userId: "u-2",
+          name: "B",
+          timer: null,
+          aufgaben: [
+            // Dasselbe Projekt wie oben — muss dedupliziert werden.
+            aufgabeKarte({ id: "a-2", projektId: "p-eins", projektName: "Erstes Projekt" }),
+            // Ohne Projekt — darf nicht in der Liste landen.
+            aufgabeKarte({ id: "a-3", projektId: null, projektName: null }),
+          ],
+        },
+      ],
+    };
+    expect(projekteAusBoard(board)).toEqual([
+      { id: "p-eins", name: "Erstes Projekt" },
+      { id: "p-zwo", name: "Zweites Projekt" },
+    ]);
+  });
+
+  it("liefert eine leere Liste ohne Projekte im Board", () => {
+    const board: Board = { stand: "2026-08-26T10:00:00.000Z", lanes: [] };
+    expect(projekteAusBoard(board)).toEqual([]);
+  });
+});
+
+describe("wendeProjektFilterAn (P1 — Projekt-Filter auf die Lanes, Task 9)", () => {
+  it("liefert die Lanes unverändert (dieselbe Referenz), wenn kein Projekt gewählt ist (null)", () => {
+    const lanes: Lane[] = [{ userId: "u-1", name: "A", timer: null, aufgaben: [] }];
+    expect(wendeProjektFilterAn(lanes, null)).toBe(lanes);
+  });
+
+  it("Lane mit fremdem Timer + passender Aufgabe bleibt mit timer: null", () => {
+    const lanes: Lane[] = [
+      {
+        userId: "u-1",
+        name: "A",
+        timer: timerKarte({ projektId: "p-fremd" }),
+        aufgaben: [
+          aufgabeKarte({ id: "a-1", projektId: "p-ziel" }),
+          aufgabeKarte({ id: "a-2", projektId: "p-fremd" }),
+        ],
+      },
+    ];
+    const ergebnis = wendeProjektFilterAn(lanes, "p-ziel");
+    expect(ergebnis).toHaveLength(1);
+    expect(ergebnis[0].timer).toBeNull();
+    expect(ergebnis[0].aufgaben).toEqual([aufgabeKarte({ id: "a-1", projektId: "p-ziel" })]);
+  });
+
+  it("behält die Timer-Karte, wenn deren eigenes Projekt zum Filter passt", () => {
+    const lanes: Lane[] = [
+      { userId: "u-1", name: "A", timer: timerKarte({ projektId: "p-ziel" }), aufgaben: [] },
+    ];
+    const ergebnis = wendeProjektFilterAn(lanes, "p-ziel");
+    expect(ergebnis).toHaveLength(1);
+    expect(ergebnis[0].timer).not.toBeNull();
+    expect(ergebnis[0].timer?.projektId).toBe("p-ziel");
+  });
+
+  it("lässt eine Lane ohne Treffer (weder Timer noch Aufgabe im Projekt) komplett raus", () => {
+    const lanes: Lane[] = [
+      {
+        userId: "u-1",
+        name: "A",
+        timer: timerKarte({ projektId: "p-fremd" }),
+        aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-fremd" })],
+      },
+      { userId: "u-2", name: "B", timer: null, aufgaben: [] },
+    ];
+    expect(wendeProjektFilterAn(lanes, "p-ziel")).toEqual([]);
+  });
+});
+
 describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
   it("enthält die Funktionsquelltexte von uhrText, datumKurz, bannerText und initialen (Einbettung nicht verloren)", () => {
     const html = renderSeite(stand());
@@ -245,6 +456,18 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
     // beim ersten Aufruf). Heute schützt nur der Kommentar in seite.ts
     // davor; dieser Test schlägt an, falls das wieder eingeführt wird.
     expect(html).not.toContain("__name(");
+  });
+
+  it("enthält auch formatiereZeit, zeitZeile, projekteAusBoard und wendeProjektFilterAn (Task 9), weiterhin ohne __name(", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain("function formatiereZeit(");
+    expect(html).toContain("function zeitZeile(");
+    expect(html).toContain("function projekteAusBoard(");
+    expect(html).toContain("function wendeProjektFilterAn(");
+    expect(html).not.toContain("__name(");
+    // </script>-Zähler bleibt bei 2 (Daten-Skript + Client-Skript) — die
+    // zusätzliche Einbettung darf keinen dritten Script-Block erzeugen.
+    expect(html.split("</script>").length - 1).toBe(2);
   });
 });
 
