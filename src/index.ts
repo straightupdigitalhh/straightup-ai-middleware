@@ -15,7 +15,7 @@ import { AworkClient } from './services/awork.js';
 import { join } from 'path';
 import { MicrosoftGraphClient } from './services/microsoft-graph.js';
 import { EmailPoller, setPollerInstance, getPollerInstance } from './services/email-poller.js';
-import { createApiAuth } from './services/auth.js';
+import { createApiAuth, createPageAuth } from './services/auth.js';
 import { openDb } from './core/db.js';
 import { UserStore } from './core/users.js';
 import { SessionStore } from './core/sessions.js';
@@ -25,10 +25,11 @@ import { createTimetrackingAutomations } from './services/timetracking.js';
 import { createUsersAdminRouter } from './routes/users-admin.js';
 import { createAutomationsRouter } from './routes/automations.js';
 import { createTimetrackingRouter } from './routes/timetracking.js';
-import { createTeamboardRouter } from './routes/teamboard.js';
+import { createTeamboardRouter, createTeamboardPageRouter } from './routes/teamboard.js';
 import { erstelleBoardLader } from './services/teamboard/daten.js';
 import { erstelleZeitenLader } from './services/teamboard/zeiten.js';
 import { TeamboardEinstellungenStore } from './core/teamboard-einstellungen.js';
+import { renderSeite } from './services/teamboard/seite.js';
 
 // ─── Konfiguration prüfen ────────────────────────────────────────
 
@@ -217,6 +218,17 @@ app.use(createTeamboardRouter({
   ladeNutzerBild: (userId) => aworkClient.getUserImage(userId),
   einstellungen: teamboardEinstellungen,
 })); // /api/teamboard/* (board/avatar: Session ODER Key; zeiten/einstellungen: nur Session)
+
+// GET /teamboard (HTML-Seite, nur Session — kein Master-Key, das ist kein
+// API-Client). Bewusst OHNE Pfad-Präfix gemountet: createPageAuth baut die
+// next=-Redirect-Adresse aus req.path; ein Mount-Präfix (z. B.
+// app.use('/teamboard', ...)) würde Express das Präfix vor Erreichen der
+// Middleware abziehen lassen (next=%2F statt %2Fteamboard). Der Router
+// selbst definiert den vollen Pfad /teamboard (siehe routes/teamboard.ts).
+app.use(createPageAuth(sessions, '/app/'), createTeamboardPageRouter({
+  ladeBoard: teamboardBoardLader,
+  renderSeite,
+}));
 
 // ─── 404 Handler ─────────────────────────────────────────────────
 
