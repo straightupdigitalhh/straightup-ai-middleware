@@ -17,11 +17,18 @@ export default function LoginPage() {
       await api.login(email, password);
       await refresh();
       const next = new URLSearchParams(window.location.search).get('next');
-      // Nur eigene, relative Pfade. ACHTUNG: location.assign parst Backslash in
-      // http(s)-URLs wie Slash (WHATWG) — "/\\evil.tld" wäre sonst ein Open Redirect.
-      if (next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\')) {
-        window.location.assign(next);
-        return;
+      // Rücksprung nur auf die eigene Origin — geprüft mit demselben WHATWG-Parser,
+      // der auch navigiert (new URL). String-Prüfungen sind hier grundsätzlich
+      // unsicher: der Parser strippt z. B. Tab/LF/CR überall im String, sodass
+      // "/\t/evil.tld" zu "//evil.tld" würde. Navigiert wird deshalb auf das
+      // GEPARSTE href, nie auf den Rohstring.
+      if (next) {
+        let ziel: URL | null = null;
+        try { ziel = new URL(next, window.location.origin); } catch { /* kaputter Wert ⇒ kein Sprung */ }
+        if (ziel && ziel.origin === window.location.origin) {
+          window.location.assign(ziel.href);
+          return;
+        }
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Verbindung fehlgeschlagen');
