@@ -13,6 +13,7 @@ export interface User {
   role: UserRole;
   disabledAt: string | null;
   createdAt: string;
+  aworkUserId: string | null;
 }
 
 interface UserRow {
@@ -23,6 +24,7 @@ interface UserRow {
   password_hash: string;
   disabled_at: string | null;
   created_at: string;
+  awork_user_id: string | null;
 }
 
 function toUser(row: UserRow): User {
@@ -33,6 +35,7 @@ function toUser(row: UserRow): User {
     role: row.role,
     disabledAt: row.disabled_at,
     createdAt: row.created_at,
+    aworkUserId: row.awork_user_id,
   };
 }
 
@@ -50,11 +53,21 @@ export class UserStore {
       password_hash: hashPassword(input.password),
       disabled_at: null,
       created_at: new Date().toISOString(),
+      awork_user_id: null,
     };
     this.db.prepare(
-      `INSERT INTO users (id, email, name, role, password_hash, disabled_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(row.id, row.email, row.name, row.role, row.password_hash, row.disabled_at, row.created_at);
+      `INSERT INTO users (id, email, name, role, password_hash, disabled_at, created_at, awork_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      row.id,
+      row.email,
+      row.name,
+      row.role,
+      row.password_hash,
+      row.disabled_at,
+      row.created_at,
+      row.awork_user_id,
+    );
     return toUser(row);
   }
 
@@ -95,6 +108,13 @@ export class UserStore {
   setRole(id: string, role: UserRole): boolean {
     const result = this.db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id);
     return result.changes > 0;
+  }
+
+  /** Setzt/löscht das awork-Mapping. Wirft bei UNIQUE-Verletzung (awork-ID schon vergeben). */
+  setAworkUserId(id: string, aworkUserId: string | null): User {
+    this.db.prepare('UPDATE users SET awork_user_id = ? WHERE id = ?').run(aworkUserId, id);
+    const row = this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined;
+    return toUser(row!);
   }
 
   /** Soft-Delete: deaktivierte Nutzer können sich nicht mehr anmelden. */
