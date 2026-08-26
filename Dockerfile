@@ -10,6 +10,11 @@ RUN npm run build
 # ─── Stage 2: Middleware ─────────────────────────────────────────
 FROM node:22-alpine
 
+# Git-SHA des Builds als Env verfügbar machen (Startlog, Verifikation
+# nach dem Deploy, welcher Stand tatsächlich läuft).
+ARG GIT_SHA
+ENV GIT_SHA=$GIT_SHA
+
 WORKDIR /app
 
 # Dependencies zuerst (Layer-Caching)

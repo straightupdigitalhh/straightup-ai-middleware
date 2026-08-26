@@ -2,7 +2,7 @@ name: Build, Push & Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, stufe2-teamboard]
 
 env:
   REGISTRY: ghcr.io
@@ -11,7 +11,33 @@ env:
   MITTWALD_SERVICE_ID: e8ef3c97-c066-4920-994c-54c14c78daea
 
 jobs:
+  # Test-Gate: läuft auf jedem Branch aus dem Trigger, VOR dem Docker-Build.
+  # Schlägt dieser Job fehl, startet der Docker-Job gar nicht erst (needs).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 22 einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Middleware-Dependencies installieren
+        run: npm ci
+
+      - name: Middleware-Tests
+        run: npm test
+
+      - name: Hub-Frontend installieren & bauen
+        run: |
+          cd web
+          npm ci
+          npm run build
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -32,7 +58,13 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
+          # Nur auf main wird tatsächlich gepusht: ein Branch-Lauf (z. B.
+          # stufe2-teamboard vor dem Merge) baut nur zur Verifikation, damit
+          # er nicht das produktive :latest überschreibt und ein
+          # Pull-and-recreate der Produktion ungemergten Code auslöst.
+          push: ${{ github.ref == 'refs/heads/main' }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -42,6 +74,10 @@ jobs:
         # Der frühere actions/recreate-Aufruf kennt keinen Request-Body –
         # {"pullPolicy": "Always"} wurde ignoriert und der Container startete
         # immer wieder mit dem lokal gecachten alten Image.
+        # Nur auf main: auf anderen Branches wurde oben kein Image gepusht,
+        # ein Pull würde hier ins Leere laufen bzw. den main-Stand erneut
+        # deployen.
+        if: github.ref == 'refs/heads/main'
         run: |
           curl -sf -X POST \
             "https://api.mittwald.de/v2/stacks/${{ env.MITTWALD_STACK_ID }}/services/${{ env.MITTWALD_SERVICE_ID }}/actions/pull" \

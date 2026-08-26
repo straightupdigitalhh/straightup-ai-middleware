@@ -264,7 +264,7 @@ app.listen(PORT, () => {
   console.log('╔═══════════════════════════════════════════════════╗');
   console.log('║     straightup Wissenssystem – Middleware         ║');
   console.log('╠═══════════════════════════════════════════════════╣');
-  console.log(`║  🌐 Server läuft auf Port ${PORT}                   ║`);
+  console.log(`║  🌐 Server läuft auf Port ${PORT}                   ║ (Build ${process.env.GIT_SHA ?? 'unbekannt'})`);
   console.log('║                                                   ║');
   console.log('║  Endpoints:                                       ║');
   console.log('║    GET  /health          → Health-Check            ║');
