@@ -47,6 +47,7 @@ export interface AworkUser {
   lastName: string | null;
   isDeactivated?: boolean;
   isArchived?: boolean;
+  isExternal?: boolean;
   userContactInfos?: { type: string; subType?: string; value: string }[];
 }
 
@@ -57,8 +58,62 @@ export interface AworkTimeEntry {
   duration: number;
   note?: string | null;
   startDateLocal?: string;
+  // Vom Teamboard-Timer-Mapping gebrauchte Felder (Teamboard: laufende Timer).
+  startDateUtc?: string;
+  startTimeUtc?: string;
+  endTimeUtc?: string | null;
+  breaks?: { startDate: string; duration?: number; endDate?: string | null }[];
   project?: { id: string; name: string } | null;
-  task?: { id: string; name: string } | null;
+  task?: { id: string; name: string; taskIdentifier?: string } | null;
+}
+
+// ─── Teamboard (rein lesend) ─────────────────────────────────────
+
+export interface TeamboardNutzer {
+  id: string;
+  vorname: string;
+  nachname: string;
+}
+
+export interface TimerPause {
+  startUtc: string; // ISO, z. B. "2026-08-25T08:31:32Z"
+  dauerSekunden: number;
+  endeUtc: string | null; // null = Pause läuft noch
+}
+
+export interface LaufenderTimer {
+  userId: string;
+  aufgabenName: string | null;
+  aufgabenKennung: string | null; // z. B. "STRI-37"
+  projektName: string | null;
+  projektId: string | null;
+  startUtc: string; // ISO mit ganzen Sekunden, z. B. "2026-08-26T09:03:31Z"
+  pausen: TimerPause[];
+}
+
+export interface OffeneAufgabe {
+  id: string;
+  name: string;
+  kennung: string | null; // taskIdentifier, z. B. "STRI-37"
+  projektName: string | null;
+  projektId: string | null;
+  statusName: string; // z. B. "EntwicklerCheck"
+  statusTyp: string; // todo | progress | review | stuck (done ist rausgefiltert)
+  faelligAm: string | null; // dueOn, ISO
+  istPrio: boolean;
+  assigneeIds: string[];
+}
+
+/** Rohform von GET /me/allavailabletasks (nur intern für getAvailableTasks). */
+interface AworkAvailableTaskRaw {
+  id: string;
+  name: string;
+  taskIdentifier?: string | null;
+  project?: { id: string; name: string } | null;
+  taskStatus?: { name: string; type: string } | null;
+  dueOn?: string | null;
+  isPrio?: boolean;
+  assignees?: { id: string }[];
 }
 
 /** E-Mail eines awork-Users aus den Kontaktinfos (bevorzugt "work"). */
@@ -100,6 +155,27 @@ export class AworkClient {
       return res.json() as Promise<T>;
     }
     return res.text() as unknown as T;
+  }
+
+  /**
+   * Holt alle Seiten eines Listen-Endpunkts (pageSize=1000) und konkateniert
+   * die Ergebnisse, solange die zuletzt gelesene Seite voll war
+   * (Seitenlänge === pageSize).
+   */
+  private async fetchAllPages<T>(path: string, extraParams: Record<string, string> = {}): Promise<T[]> {
+    const pageSize = 1000;
+    const results: T[] = [];
+    let page = 1;
+    for (;;) {
+      const qs = new URLSearchParams({ ...extraParams, pageSize: String(pageSize), page: String(page) });
+      const data = await this.request<T[]>(`${path}?${qs.toString()}`);
+      results.push(...data);
+      if (data.length !== pageSize) {
+        break;
+      }
+      page += 1;
+    }
+    return results;
   }
 
   // ─── Lookup ──────────────────────────────────────────────────
@@ -149,8 +225,7 @@ export class AworkClient {
    * `day` als "YYYY-MM-DD".
    */
   async getTimeEntriesForDay(day: string): Promise<AworkTimeEntry[]> {
-    const filter = `StartDateLocal ge datetime'${day}T00:00:00' and StartDateLocal le datetime'${day}T23:59:59'`;
-    return this.request(`/timeentries?filterby=${encodeURIComponent(filter)}&pageSize=1000`);
+    return this.getTimeEntriesForRange(day, day);
   }
 
   // ─── Documents ───────────────────────────────────────────────
@@ -248,5 +323,102 @@ export class AworkClient {
       headers: form.getHeaders(),
       body: form,
     });
+  }
+
+  // ─── Teamboard (rein lesend) ───────────────────────────────────
+
+  /** Aktive, interne Nutzer fürs Teamboard (deaktivierte/externe fallen raus). */
+  async getBoardUsers(): Promise<TeamboardNutzer[]> {
+    const data = await this.fetchAllPages<AworkUser>('/users');
+    return data
+      .filter((u) => !u.isDeactivated && !u.isExternal)
+      .map((u) => ({
+        id: u.id,
+        // Namen trimmen — echte Daten enthalten teils Leerzeichen am Ende
+        // ("Goldammer "), und nachname kann ganz fehlen (Nutzerin "Gabi").
+        vorname: String(u.firstName ?? '').trim(),
+        nachname: String(u.lastName ?? '').trim(),
+      }));
+  }
+
+  /** Aktuell laufende Zeit-Timer (für alle Nutzer, nicht nur "me"). */
+  async getRunningTimers(): Promise<LaufenderTimer[]> {
+    // Stufe-1-Spec §3: "endTimeUtc eq null" allein reicht NICHT (manuelle
+    // Dauer-Buchungen ohne Startzeit haben ebenfalls kein Ende) — erst
+    // zusammen mit "startTimeUtc ne null" bleiben genau die laufenden Timer
+    // übrig.
+    const filter = 'endTimeUtc eq null and startTimeUtc ne null';
+    const data = await this.fetchAllPages<AworkTimeEntry>('/timeentries', { filterby: filter });
+    return data.map((e) => ({
+      userId: e.userId,
+      aufgabenName: e.task?.name ?? null,
+      aufgabenKennung: e.task?.taskIdentifier ?? null,
+      projektName: e.project?.name ?? null,
+      projektId: e.project?.id ?? null,
+      // startDateUtc trägt das Datum, startTimeUtc die Uhrzeit mit bis zu
+      // 7 Nachkommastellen — Date.parse kommt damit nicht zuverlässig klar,
+      // deshalb auf ganze Sekunden gekürzt zusammensetzen.
+      startUtc: `${String(e.startDateUtc).slice(0, 10)}T${String(e.startTimeUtc).split('.')[0]}Z`,
+      pausen: (e.breaks ?? []).map((b) => ({
+        startUtc: b.startDate,
+        dauerSekunden: b.duration ?? 0,
+        // Fehlendes endDate ⇒ Pause läuft noch.
+        endeUtc: b.endDate ?? null,
+      })),
+    }));
+  }
+
+  /** Offene Aufgaben (alle Projekte, für den API-Nutzer sichtbar). */
+  async getAvailableTasks(): Promise<OffeneAufgabe[]> {
+    // Stufe-1-Spec §3: /tasks ist für den API-Token gesperrt — der einzig
+    // erreichbare Pfad ist /me/allavailabletasks (me = API-Nutzer, sieht
+    // alle Projekte). Nicht "aufräumen" auf /tasks.
+    const filter = "taskStatus/type ne 'done'";
+    const data = await this.fetchAllPages<AworkAvailableTaskRaw>('/me/allavailabletasks', { filterby: filter });
+    return data.map((t) => ({
+      id: t.id,
+      name: t.name,
+      kennung: t.taskIdentifier ?? null,
+      projektName: t.project?.name ?? null,
+      projektId: t.project?.id ?? null,
+      statusName: t.taskStatus?.name ?? '',
+      statusTyp: t.taskStatus?.type ?? 'todo',
+      faelligAm: t.dueOn ?? null,
+      istPrio: t.isPrio === true,
+      assigneeIds: (t.assignees ?? []).map((a) => a.id),
+    }));
+  }
+
+  /**
+   * Alle Zeiteinträge in einem (inklusiven) Datumsbereich (lokale awork-Zeit).
+   * `fromLocal`/`toLocal` als "YYYY-MM-DD". Verallgemeinert getTimeEntriesForDay.
+   */
+  async getTimeEntriesForRange(fromLocal: string, toLocal: string): Promise<AworkTimeEntry[]> {
+    const filter = `StartDateLocal ge datetime'${fromLocal}T00:00:00' and StartDateLocal le datetime'${toLocal}T23:59:59'`;
+    return this.fetchAllPages<AworkTimeEntry>('/timeentries', { filterby: filter });
+  }
+
+  /**
+   * Profilbild eines Nutzers (Teamboard-Avatare). null bei 404 (kein Bild
+   * hochgeladen oder Nutzer unbekannt — awork unterscheidet beides nicht).
+   * Nutzt bewusst NICHT request<T>(): der Helfer geht über res.text()/
+   * res.json() und korrumpiert damit Binärdaten. Deshalb hier ein eigener
+   * fetch-Aufruf mit arrayBuffer().
+   */
+  async getUserImage(userId: string): Promise<{ typ: string; bytes: Buffer } | null> {
+    const path = `/files/images/users/${userId}`;
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: 'GET',
+      headers: this.headers(),
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`awork API ${res.status} ${res.statusText}: ${body} [GET ${path}]`);
+    }
+    return {
+      typ: res.headers.get('content-type') ?? 'application/octet-stream',
+      bytes: Buffer.from(await res.arrayBuffer()),
+    };
   }
 }
