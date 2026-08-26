@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getAuth, requireAdmin } from '../services/auth.js';
 import { clientErrorMessage } from '../services/errors.js';
-import type { BoardLader } from '../services/teamboard/daten.js';
+import type { BoardLader, BoardStand } from '../services/teamboard/daten.js';
 import type { ZeitenProNutzer } from '../services/teamboard/zeiten.js';
 import type { TeamboardEinstellungen, TeamboardEinstellungenStore } from '../core/teamboard-einstellungen.js';
 
@@ -240,6 +240,57 @@ export function createTeamboardRouter(deps: Deps): Router {
     } catch (e: any) {
       console.error(`❌ teamboard: Avatar-Anfrage fehlgeschlagen: ${e?.message ?? e}`);
       res.status(500).json({ error: 'internal', message: clientErrorMessage(e) });
+    }
+  });
+
+  return router;
+}
+
+// ─── Seite: GET /teamboard ─────────────────────────────────────────
+//
+// Muss HINTER createPageAuth (services/auth.ts) gemountet werden — dieser
+// Router selbst prüft keine Auth, er setzt nur res.locals.auth voraus.
+// Die 503-/500-HTML-Bodies sind 1:1 aus agents/teamboard/server.ts
+// (Stufe 1) übernommen, damit sich am Kaltstart-/Fehlerverhalten nichts
+// ändert.
+
+interface PageDeps {
+  ladeBoard: BoardLader;
+  renderSeite: (stand: BoardStand) => string;
+}
+
+const KALTSTART_HTML =
+  '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="30"><title>Teamboard</title><p>awork ist gerade nicht erreichbar — nächster Versuch in 30 Sekunden.</p>';
+const FEHLER_HTML = '<!doctype html><meta charset="utf-8"><title>Fehler</title><p>Interner Fehler</p>';
+
+export function createTeamboardPageRouter(deps: PageDeps): Router {
+  const router = Router();
+
+  router.get('/teamboard', async (_req: Request, res: Response) => {
+    try {
+      let stand: BoardStand;
+      try {
+        stand = await deps.ladeBoard();
+      } catch (fehler) {
+        // Kaltstart: es gab noch nie einen Stand, awork gerade nicht
+        // erreichbar. Nur .message loggen, nie das Fehlerobjekt (könnte
+        // einen Token enthalten).
+        console.error('teamboard: Board laden fehlgeschlagen —', fehler instanceof Error ? fehler.message : String(fehler));
+        res.set('Cache-Control', 'no-store').status(503).type('text/html; charset=utf-8').send(KALTSTART_HTML);
+        return;
+      }
+      // renderSeite aufrufen, bevor Headers geschrieben werden, damit ein
+      // Fehler dort noch abgefangen werden kann, ohne dass eine teilweise
+      // geschriebene Response vorliegt.
+      const html = deps.renderSeite(stand);
+      res.set('Cache-Control', 'no-store').status(200).type('text/html; charset=utf-8').send(html);
+    } catch (fehler) {
+      // Fehler bei renderSeite oder sonst etwas im Handler — nie das
+      // Fehlerobjekt oder den Stacktrace an den Client ausliefern.
+      console.error('teamboard: Seite rendern fehlgeschlagen —', fehler instanceof Error ? fehler.message : String(fehler));
+      if (!res.headersSent) {
+        res.set('Cache-Control', 'no-store').status(500).type('text/html; charset=utf-8').send(FEHLER_HTML);
+      }
     }
   });
 
