@@ -464,6 +464,16 @@ describe("renderSeite", () => {
     expect(block).toContain("koerper.message");
   });
 
+  it("erklärt einen Netzwerkfehler beim Erledigen im Panel und zeichnet neu, statt den Knopf stumm deaktiviert stehen zu lassen (M4)", () => {
+    const html = renderSeite(stand(), null);
+    const block = html.split("function erledige(")[1]?.split("\n  }")[0];
+    const catchBlock = block?.split(".catch(function (fehler)")[1];
+    expect(catchBlock).toBeDefined();
+    expect(catchBlock).toContain("erledigenLaeuft = false;");
+    expect(catchBlock).toContain("panelFehlerText =");
+    expect(catchBlock).toContain("fuellePanel();");
+  });
+
   it("führt den Countdown mit undoSekunden aus der Serverantwort — die 20 steht nirgends im Client (Task 8)", () => {
     const html = renderSeite(stand(), null);
     const erledigeBlock = html.split("function erledige(")[1]?.split("\n  }")[0];

@@ -475,7 +475,9 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
   // Fehlertext über einen laufenden, funktionierenden Countdown.
   var erledigenLaeuft = false;
   // Text der letzten Fehlerantwort — IMMER die message aus der Serverantwort,
-  // nie ein im Client erfundener Text.
+  // nie ein im Client erfundener Text. Einzige Ausnahme: kam gar keine
+  // Antwort an (Netzwerkfehler im .catch), gibt es keine message, und ohne
+  // eigenen Text stünde der Knopf stumm deaktiviert da.
   var panelFehlerText = null;
 
   function el(tag, klasse, text) {
@@ -1091,6 +1093,14 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
       })
       .catch(function (fehler) {
         erledigenLaeuft = false;
+        // Ohne Text und Neuzeichnen bliebe der Knopf nach einem
+        // Netzwerkfehler deaktiviert und ohne Erklärung stehen, bis der
+        // nächste Poll ihn zufällig neu zeichnet. Der Text sagt bewusst
+        // nicht, dass nichts passiert sei: die Anfrage kann den Server
+        // erreicht haben, nur die Antwort kam nicht an.
+        panelFehlerText =
+          "Verbindung zum Server unterbrochen — bitte neu laden und nachsehen, ob die Aufgabe erledigt ist.";
+        fuellePanel();
         console.warn("teamboard: Erledigen fehlgeschlagen", fehler);
       });
   }
