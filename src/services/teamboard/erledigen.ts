@@ -188,6 +188,9 @@ export function erstelleErledigenDienst(opts: {
     try {
       await opts.awork.changeTaskStatus(a.taskId, doneStatusId);
     } catch (fehler) {
+      // Eine gemerkte done-Status-ID kann in awork verschwunden sein — sie
+      // darf den nächsten Klick in diesem Projekt nicht erneut in denselben
+      // Fehler führen (s. doneStatusCache).
       doneStatusCache.delete(vorher.projectId);
       throw fehler;
     }
