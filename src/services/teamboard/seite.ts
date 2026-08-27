@@ -761,7 +761,7 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
       .then(function (res) {
         if (res.status === 401) {
           // Session abgelaufen — Reload landet über den Guard auf dem
-          // Login; sofort stoppen, sonst zählt jeder 30-s-Poll in die
+          // Login; sofort stoppen, sonst zählt jeder 10-s-Poll in die
           // Brute-Force-Bremse (Karte Risiko 6).
           location.reload();
           return;
@@ -784,7 +784,7 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
       .then(function (res) {
         if (res.status === 401) {
           // Gleiche Behandlung wie beim Board-Fetch (nachladen): Session
-          // abgelaufen — sofort stoppen, sonst zählt jeder 30-s-Poll in die
+          // abgelaufen — sofort stoppen, sonst zählt jeder 10-s-Poll in die
           // Brute-Force-Bremse (Karte Risiko 6).
           location.reload();
           return;
@@ -1152,12 +1152,20 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
     zeichne();
   });
 
+  // Sofortiges Nachladen beim Tab-Wechsel (Stufe 3, Task 9): Rückkehr in
+  // den Tab soll nicht erst auf den nächsten 10-s-Poll warten. Ruft
+  // dieselbe nachladen() wie das Intervall auf, samt ihrer
+  // 401-Behandlung — kein eigener Fetch-Pfad daneben.
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") nachladen();
+  });
+
   zeichne();
   ticke();
   ladeZeiten();
   ladeEinstellungen();
   setInterval(ticke, 1000);
-  setInterval(nachladen, 30000);
+  setInterval(nachladen, 10000);
 })();
 </script>
 </body>

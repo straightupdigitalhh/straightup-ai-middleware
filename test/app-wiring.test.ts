@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import express from 'express';
 import helmet from 'helmet';
+import compression from 'compression';
 import request from 'supertest';
 import { createFeedbackRouter } from '../src/routes/feedback.js';
 import { FeedbackKeyStore } from '../src/services/feedback-keys.js';
@@ -25,10 +26,23 @@ function makeApp() {
   };
   const app = express();
   app.set('trust proxy', 1);
-  // Reihenfolge wie in src/index.ts: /feedback zuerst, dann helmet
+  // Reihenfolge wie in src/index.ts: /feedback zuerst, dann helmet, dann
+  // compression (Stufe 3, Task 9).
   app.use('/feedback', createFeedbackRouter({ store, awork: awork as any, workspaceUrl: '' }));
   app.use(helmet());
+  app.use(compression());
   app.get('/health', (_req, res) => { res.json({ status: 'ok' }); });
+  // Hinreichend große JSON-Antwort für den Kompressions-Test — compression()
+  // komprimiert absichtlich erst ab einem Schwellenwert (Default 1 KB); eine
+  // kleine Antwort wie /health würde den Test nichts belegen lassen.
+  app.get('/gross', (_req, res) => {
+    res.json({
+      eintraege: Array.from({ length: 500 }, (_, i) => ({
+        id: i,
+        text: 'straightup Teamboard Testdaten für den Kompressions-Test',
+      })),
+    });
+  });
   return app;
 }
 
@@ -55,5 +69,12 @@ describe('App-Verdrahtung: helmet vs. /feedback', () => {
     expect(res.status).toBe(200);
     expect(res.headers['cross-origin-resource-policy']).toBe('same-origin');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+});
+
+describe('App-Verdrahtung: gzip-Kompression (Stufe 3, Task 9)', () => {
+  it('liefert eine hinreichend große JSON-Antwort gzip-komprimiert, wenn der Client es akzeptiert', async () => {
+    const res = await request(makeApp()).get('/gross').set('Accept-Encoding', 'gzip');
+    expect(res.headers['content-encoding']).toBe('gzip');
   });
 });

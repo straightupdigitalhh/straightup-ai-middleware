@@ -178,7 +178,7 @@ describe("renderSeite", () => {
     expect(html).toContain(".lane-kopf h2 { margin: 0; font-size: 17px; }");
   });
 
-  it("stoppt beim Nachladen sofort per Reload, wenn die Session abgelaufen ist (401), statt den 30-s-Poll in die Brute-Force-Bremse zählen zu lassen (Stufe 2, Task 8)", () => {
+  it("stoppt beim Nachladen sofort per Reload, wenn die Session abgelaufen ist (401), statt den 10-s-Poll in die Brute-Force-Bremse zählen zu lassen (Stufe 2, Task 8; Takt seit Stufe 3, Task 9)", () => {
     // Text-Tripwire (kein jsdom in dieser Suite): das gerenderte HTML muss
     // sowohl den neuen API-Pfad als auch den 401-Reload-Zweig enthalten.
     const html = renderSeite(stand(), null);
@@ -188,17 +188,34 @@ describe("renderSeite", () => {
     expect(nachladenBlock).toContain("location.reload();");
   });
 
+  it("pollt alle 10 statt 30 Sekunden nach (Stufe 3, Task 9) — Client-Takt und Server-TTL gehören zusammen, sonst holt der Client nur häufiger denselben Cache-Stand", () => {
+    const html = renderSeite(stand(), null);
+    expect(html).toContain("setInterval(nachladen, 10000);");
+    expect(html).not.toContain("30000");
+  });
+
+  it("lädt bei der Rückkehr in den sichtbaren Tab sofort nach, statt bis zu 10 Sekunden auf den nächsten Poll zu warten (Stufe 3, Task 9)", () => {
+    // Text-Tripwire (kein jsdom in dieser Suite): derselbe nachladen()-Pfad
+    // wie das Intervall, samt seiner 401-Behandlung — kein eigener
+    // Fetch-Pfad daneben.
+    const html = renderSeite(stand(), null);
+    const sichtbarkeitBlock = html.split('addEventListener("visibilitychange"')[1]?.split("});")[0];
+    expect(sichtbarkeitBlock).toBeDefined();
+    expect(sichtbarkeitBlock).toContain('document.visibilityState === "visible"');
+    expect(sichtbarkeitBlock).toContain("nachladen()");
+  });
+
   // Die folgenden Tests sind — wie oben bereits vermerkt — reine Text-
   // Tripwires (kein jsdom in dieser Suite), kein Beleg für das tatsächliche
   // Laufzeitverhalten im Browser.
 
-  it("lädt nach jedem Zeichen-Zyklus (Start + 30-s-Nachladen) zusätzlich die Zeitsummen, mit derselben 401-Reload-Behandlung wie beim Board-Fetch (Task 9)", () => {
+  it("lädt nach jedem Zeichen-Zyklus (Start + 10-s-Nachladen) zusätzlich die Zeitsummen, mit derselben 401-Reload-Behandlung wie beim Board-Fetch (Task 9; Takt seit Stufe 3, Task 9)", () => {
     const html = renderSeite(stand(), null);
     expect(html).toContain('fetch("/api/teamboard/zeiten"');
     const ladeZeitenBlock = html.split("function ladeZeiten()")[1]?.split("\n  }")[0];
     expect(ladeZeitenBlock).toContain("res.status === 401");
     expect(ladeZeitenBlock).toContain("location.reload();");
-    // Nach beiden zeichne()-Zyklen aufgerufen: initial und im 30-s-Nachladen.
+    // Nach beiden zeichne()-Zyklen aufgerufen: initial und im 10-s-Nachladen.
     expect(html).toContain("zeichne(); ticke(); ladeZeiten();");
     const nachladenBlock = html.split("function nachladen()")[1]?.split("\n  }")[0];
     expect(nachladenBlock).toContain("zeichne(); ticke(); ladeZeiten();");
