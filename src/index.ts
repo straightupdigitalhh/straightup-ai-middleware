@@ -15,7 +15,7 @@ import { AworkClient } from './services/awork.js';
 import { join } from 'path';
 import { MicrosoftGraphClient } from './services/microsoft-graph.js';
 import { EmailPoller, setPollerInstance, getPollerInstance } from './services/email-poller.js';
-import { createApiAuth } from './services/auth.js';
+import { createApiAuth, createPageAuth } from './services/auth.js';
 import { openDb } from './core/db.js';
 import { UserStore } from './core/users.js';
 import { SessionStore } from './core/sessions.js';
@@ -25,6 +25,11 @@ import { createTimetrackingAutomations } from './services/timetracking.js';
 import { createUsersAdminRouter } from './routes/users-admin.js';
 import { createAutomationsRouter } from './routes/automations.js';
 import { createTimetrackingRouter } from './routes/timetracking.js';
+import { createTeamboardRouter, createTeamboardPageRouter } from './routes/teamboard.js';
+import { erstelleBoardLader } from './services/teamboard/daten.js';
+import { erstelleZeitenLader } from './services/teamboard/zeiten.js';
+import { TeamboardEinstellungenStore } from './core/teamboard-einstellungen.js';
+import { renderSeite } from './services/teamboard/seite.js';
 
 // ─── Konfiguration prüfen ────────────────────────────────────────
 
@@ -82,6 +87,15 @@ scheduler.register({
 
 const feedbackKeyStore = new FeedbackKeyStore(join(DATA_DIR, 'feedback-keys.json'));
 const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
+
+// ─── Teamboard ────────────────────────────────────────────────────
+// Board- und Zeiten-Lader nutzen die geteilte aworkClient-Instanz und
+// laufen EINMAL pro Prozess (TTL-Cache, s. daten.ts/zeiten.ts) — nicht
+// je Request neu erzeugen, sonst geht der Cache verloren.
+
+const teamboardBoardLader = erstelleBoardLader({ client: aworkClient, ttlMs: 30_000 });
+const teamboardZeitenLader = erstelleZeitenLader({ awork: aworkClient, ttlMs: 30_000 });
+const teamboardEinstellungen = new TeamboardEinstellungenStore(db);
 
 // ─── Microsoft Graph (E-Mail-Polling + Mail-Versand) ─────────────
 // MS_MAILBOXES: kommagetrennte Liste der Postfächer, in denen die
@@ -198,6 +212,29 @@ app.use(createFeedbackAdminRouter({ store: feedbackKeyStore, awork: aworkClient 
 app.use(createUsersAdminRouter({ users, sessions }));  // /api/users (nur Admins)
 app.use(createAutomationsRouter({ scheduler }));       // /api/automations (auth, steuern nur Admins)
 app.use(createTimetrackingRouter({ awork: aworkClient })); // /api/timetracking/users (Admin)
+app.use(createTeamboardRouter({
+  ladeBoard: teamboardBoardLader,
+  ladeZeiten: teamboardZeitenLader,
+  ladeNutzerBild: (userId) => aworkClient.getUserImage(userId),
+  einstellungen: teamboardEinstellungen,
+})); // /api/teamboard/* (board/avatar: Session ODER Key; zeiten/einstellungen: nur Session)
+
+// GET /teamboard (HTML-Seite, nur Session — kein Master-Key, das ist kein
+// API-Client). Der Guard (createPageAuth) wird dem Router als Route-
+// Middleware übergeben (deps.pageAuth) statt global vorgeschaltet — ein
+// globales app.use(createPageAuth(...), router) würde JEDE
+// unauthentifizierte Anfrage auf jeden bis dahin unverarbeiteten Pfad mit
+// 302 statt dem JSON-404 beantworten (Fix-Runde 1, Task 8). Der Router wird
+// weiterhin OHNE Pfad-Präfix gemountet: createPageAuth baut die
+// next=-Redirect-Adresse aus req.path; ein Mount-Präfix (z. B.
+// app.use('/teamboard', ...)) würde Express das Präfix vor Erreichen der
+// Middleware abziehen lassen (next=%2F statt %2Fteamboard). Der Router
+// selbst definiert den vollen Pfad /teamboard (siehe routes/teamboard.ts).
+app.use(createTeamboardPageRouter({
+  ladeBoard: teamboardBoardLader,
+  renderSeite,
+  pageAuth: createPageAuth(sessions, '/app/'),
+}));
 
 // ─── 404 Handler ─────────────────────────────────────────────────
 
@@ -227,7 +264,7 @@ app.listen(PORT, () => {
   console.log('╔═══════════════════════════════════════════════════╗');
   console.log('║     straightup Wissenssystem – Middleware         ║');
   console.log('╠═══════════════════════════════════════════════════╣');
-  console.log(`║  🌐 Server läuft auf Port ${PORT}                   ║`);
+  console.log(`║  🌐 Server läuft auf Port ${PORT}                   ║ (Build ${process.env.GIT_SHA || 'unbekannt'})`);
   console.log('║                                                   ║');
   console.log('║  Endpoints:                                       ║');
   console.log('║    GET  /health          → Health-Check            ║');

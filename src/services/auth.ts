@@ -85,6 +85,26 @@ export function createApiAuth(
   };
 }
 
+/**
+ * Auth-Middleware für serverseitig gerenderte HTML-Seiten: verlangt eine
+ * gültige Session (Cookie), kein Master-Key (der hat keine Nutzeridentität,
+ * für persönliche Seiten ungeeignet). Ohne gültige Session → 302 auf
+ * loginPfad mit next=<aktuellem Pfad> — bewusst NUR req.path, nie die Query,
+ * sonst wäre next ein Open-Redirect-Vektor für beliebige externe Ziele.
+ */
+export function createPageAuth(sessions: SessionStore, loginPfad: string) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const token = parseCookies(req)[SESSION_COOKIE];
+    const user = token ? sessions.resolve(token) : undefined;
+    if (user) {
+      res.locals.auth = { via: 'session', role: user.role, user } satisfies AuthContext;
+      next();
+      return;
+    }
+    res.redirect(302, `${loginPfad}?next=${encodeURIComponent(req.path)}`);
+  };
+}
+
 /** Rückwärtskompatibler Alias: nur Master-Key (ohne Sessions). */
 export function createApiKeyAuth(expectedKey: string, failureLimiter?: FixedWindowLimiter) {
   return createApiAuth(expectedKey, undefined, failureLimiter);

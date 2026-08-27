@@ -49,6 +49,16 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX idx_runs_automation ON automation_runs(automation_id, started_at DESC);
   `,
+  // v2: awork-Mapping + Teamboard-Einstellungen
+  `
+  ALTER TABLE users ADD COLUMN awork_user_id TEXT;
+  CREATE UNIQUE INDEX idx_users_awork ON users(awork_user_id) WHERE awork_user_id IS NOT NULL;
+
+  CREATE TABLE teamboard_einstellungen (
+    user_id TEXT PRIMARY KEY REFERENCES users(id),
+    reihenfolge TEXT, ausgeblendet TEXT, updated_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export function openDb(filePath: string): DatabaseSync {

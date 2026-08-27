@@ -1,11 +1,12 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { api, User, formatDateTime } from '../lib/api';
+import { api, User, TeamboardNutzer, formatDateTime } from '../lib/api';
 import { StatusBadge } from '../components/StatusBadge';
 import { useAuth } from '../App';
 
 export default function UsersPage() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
+  const [aworkNutzer, setAworkNutzer] = useState<TeamboardNutzer[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -16,6 +17,7 @@ export default function UsersPage() {
 
   const load = () => api.users().then(setUsers).catch(e => setError(e.message));
   useEffect(() => { load(); }, []);
+  useEffect(() => { api.teamboardNutzer().then(setAworkNutzer).catch(e => setError(e.message)); }, []);
 
   const create = async (e: FormEvent) => {
     e.preventDefault();
@@ -40,6 +42,16 @@ export default function UsersPage() {
     }
   };
 
+  const setAworkMapping = async (u: User, aworkUserId: string | null) => {
+    setError(''); setMessage('');
+    try {
+      await api.patchUser(u.id, { aworkUserId });
+      await load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   return (
     <div>
       <h1 className="font-heading text-2xl font-semibold mb-6">Nutzer</h1>
@@ -54,6 +66,7 @@ export default function UsersPage() {
               <th className="px-4 py-2">E-Mail</th>
               <th className="px-4 py-2">Rolle</th>
               <th className="px-4 py-2">Status</th>
+              <th className="px-4 py-2">awork-Verknüpfung</th>
               <th className="px-4 py-2">Seit</th>
               <th className="px-4 py-2" />
             </tr>
@@ -68,6 +81,18 @@ export default function UsersPage() {
                   {u.disabledAt
                     ? <StatusBadge kind="muted">deaktiviert</StatusBadge>
                     : <StatusBadge kind="ok">aktiv</StatusBadge>}
+                </td>
+                <td className="px-4 py-2">
+                  <select
+                    className="input py-1 text-xs"
+                    value={u.aworkUserId ?? ''}
+                    onChange={e => setAworkMapping(u, e.target.value || null)}
+                  >
+                    <option value="">— nicht verknüpft —</option>
+                    {aworkNutzer.map(n => (
+                      <option key={n.id} value={n.id}>{n.name}</option>
+                    ))}
+                  </select>
                 </td>
                 <td className="px-4 py-2 text-neutral-400">{formatDateTime(u.createdAt)}</td>
                 <td className="px-4 py-2 text-right">
