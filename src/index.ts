@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
+import compression from 'compression';
 import { existsSync } from 'fs';
 import emailRouter from './routes/email.js';
 import transcriptRouter from './routes/transcript.js';
@@ -28,7 +29,10 @@ import { createTimetrackingRouter } from './routes/timetracking.js';
 import { createTeamboardRouter, createTeamboardPageRouter } from './routes/teamboard.js';
 import { erstelleBoardLader } from './services/teamboard/daten.js';
 import { erstelleZeitenLader } from './services/teamboard/zeiten.js';
+import { erstelleErledigenDienst } from './services/teamboard/erledigen.js';
+import { erstelleKommentarAutomation, erstelleLaufAufraeumAutomation } from './services/teamboard/kommentar-automation.js';
 import { TeamboardEinstellungenStore } from './core/teamboard-einstellungen.js';
+import { TeamboardErledigungenStore } from './core/teamboard-erledigungen.js';
 import { renderSeite } from './services/teamboard/seite.js';
 
 // ─── Konfiguration prüfen ────────────────────────────────────────
@@ -92,10 +96,27 @@ const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
 // Board- und Zeiten-Lader nutzen die geteilte aworkClient-Instanz und
 // laufen EINMAL pro Prozess (TTL-Cache, s. daten.ts/zeiten.ts) — nicht
 // je Request neu erzeugen, sonst geht der Cache verloren.
+//
+// ttlMs 10_000 (Stufe 3, Task 9): muss mit dem Client-Poll-Takt in
+// seite.ts (setInterval(nachladen, 10000)) übereinstimmen — bliebe der
+// TTL höher, holte der Client nur häufiger denselben Cache-Stand, ohne
+// dass die Anzeige frischer würde. awork erlaubt 50 Anfragen/s und
+// 3.000/min (Stand 27.08.2026); ein Board-Aufbau kostet 3, ein
+// Zeiten-Aufbau 2 awork-Anfragen — bei diesem Takt 30/min, ca. 1 % des
+// Minutenkontingents, unabhängig von der Zahl offener Tabs (TTL-Cache
+// + In-Flight-Dedup deckeln den Upstream auf die Poll-Rate).
 
-const teamboardBoardLader = erstelleBoardLader({ client: aworkClient, ttlMs: 30_000 });
-const teamboardZeitenLader = erstelleZeitenLader({ awork: aworkClient, ttlMs: 30_000 });
+const teamboardBoardLader = erstelleBoardLader({ client: aworkClient, ttlMs: 10_000 });
+const teamboardZeitenLader = erstelleZeitenLader({ awork: aworkClient, ttlMs: 10_000 });
 const teamboardEinstellungen = new TeamboardEinstellungenStore(db);
+const teamboardErledigenDienst = erstelleErledigenDienst({
+  awork: aworkClient,
+  store: new TeamboardErledigungenStore(db),
+  ladeBoard: teamboardBoardLader,
+  cacheVerwerfen: teamboardBoardLader.verwerfen,
+});
+scheduler.register(erstelleKommentarAutomation(teamboardErledigenDienst));
+scheduler.register(erstelleLaufAufraeumAutomation(scheduler));
 
 // ─── Microsoft Graph (E-Mail-Polling + Mail-Versand) ─────────────
 // MS_MAILBOXES: kommagetrennte Liste der Postfächer, in denen die
@@ -158,6 +179,15 @@ app.use(helmet({
   },
 }));
 
+// ─── Kompression ─────────────────────────────────────────────────
+// gzip auf alle Antworten (die Board-Antwort schrumpft von ~79 KB auf
+// ~13 KB) — nach helmet, vor Body-Parsern/Routen. Bewusste Ausnahme von
+// „keine neuen npm-Abhängigkeiten": ohne gzip kostete der 10-Sekunden-
+// Takt (Stufe 3, Task 9) dreimal so viel Bandbreite wie heute; mit gzip
+// die Hälfte. Kleine Antworten lässt die Middleware-eigene Schwelle
+// (Default 1 KB) unangetastet.
+app.use(compression());
+
 // JSON + URL-encoded Body Parsing
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
@@ -217,7 +247,8 @@ app.use(createTeamboardRouter({
   ladeZeiten: teamboardZeitenLader,
   ladeNutzerBild: (userId) => aworkClient.getUserImage(userId),
   einstellungen: teamboardEinstellungen,
-})); // /api/teamboard/* (board/avatar: Session ODER Key; zeiten/einstellungen: nur Session)
+  erledigenDienst: teamboardErledigenDienst,
+})); // /api/teamboard/* (board/avatar: Session ODER Key; zeiten/einstellungen/erledigen/rueckgaengig: nur Session)
 
 // GET /teamboard (HTML-Seite, nur Session — kein Master-Key, das ist kein
 // API-Client). Der Guard (createPageAuth) wird dem Router als Route-

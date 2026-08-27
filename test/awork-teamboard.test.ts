@@ -223,6 +223,7 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         statusTyp: 'review',
         faelligAm: null,
         istPrio: false,
+        istWiederkehrend: false,
         assigneeIds: ['u-lea'],
       },
       {
@@ -235,6 +236,7 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         statusTyp: 'progress',
         faelligAm: '2026-08-27T00:00:00Z',
         istPrio: true,
+        istWiederkehrend: false,
         assigneeIds: ['u-lea', 'u-jan'],
       },
       {
@@ -247,6 +249,7 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         statusTyp: 'todo',
         faelligAm: null,
         istPrio: false,
+        istWiederkehrend: false,
         assigneeIds: [],
       },
     ]);
@@ -276,9 +279,127 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         statusTyp: 'todo',
         faelligAm: null,
         istPrio: false,
+        istWiederkehrend: false,
         assigneeIds: [],
       },
     ]);
+  });
+
+  it('setzt istWiederkehrend und assigneeIds aus der Rohantwort von /me/allavailabletasks (Produktionskette der einzigen Stelle, die OffeneAufgabe erzeugt)', async () => {
+    fakeFetch(200, [
+      {
+        id: 't-5',
+        name: 'Wiederkehrende Wartung',
+        isRecurring: true,
+        taskStatus: { name: 'Offen', type: 'todo' },
+        assignees: [{ id: 'u-lea' }, { id: 'u-jan' }],
+      },
+    ]);
+    const client = new AworkClient('T', BASE_URL);
+    const result = await client.getAvailableTasks();
+    expect(result[0].istWiederkehrend).toBe(true);
+    expect(result[0].assigneeIds).toEqual(['u-lea', 'u-jan']);
+  });
+
+  // ─── Teamboard: Schreibmethoden (Stufe 3) ────────────────────
+  // Diese vier Methoden schreiben aktiv (Statuswechsel, Kommentar) bzw.
+  // lesen für den Schreibpfad (Status-Liste, Einzelaufgabe) — bis Stufe 2
+  // war awork ausschließlich lesend angebunden.
+
+  it('getTaskStatuses ruft GET /projects/{id}/taskstatuses und mappt id/name/type', async () => {
+    const calls = fakeFetch(200, [
+      { id: 's-todo', name: 'Offen', type: 'todo' },
+      { id: 's-done', name: 'Erledigt', type: 'done' },
+    ]);
+    const client = new AworkClient('T', BASE_URL);
+    const result = await client.getTaskStatuses('proj-1');
+    expect(result).toEqual([
+      { id: 's-todo', name: 'Offen', type: 'todo' },
+      { id: 's-done', name: 'Erledigt', type: 'done' },
+    ]);
+    expect(calls[0].url).toBe(`${BASE_URL}/projects/proj-1/taskstatuses`);
+  });
+
+  it('changeTaskStatus schickt POST /tasks/changestatuses mit Array-Body [{taskId,statusId}] und wirft NICHT bei 204 mit leerem Body', async () => {
+    // Der wichtigste Fall: ein JSON-Parse auf leerem Body würde sonst knallen
+    // — request() muss auf res.text() zurückfallen (awork.ts:153-157).
+    const calls: { url: string; init: any }[] = [];
+    fetchMock.mockImplementation(async (url: any, init: any) => {
+      calls.push({ url: String(url), init });
+      return {
+        ok: true,
+        status: 204,
+        statusText: 'No Content',
+        headers: { get: () => null },
+        text: async () => '',
+      };
+    });
+    const client = new AworkClient('T', BASE_URL);
+    await expect(client.changeTaskStatus('t-1', 's-done')).resolves.toBeUndefined();
+    expect(calls[0].url).toBe(`${BASE_URL}/tasks/changestatuses`);
+    expect(calls[0].init.method).toBe('POST');
+    expect(JSON.parse(calls[0].init.body)).toEqual([{ taskId: 't-1', statusId: 's-done' }]);
+  });
+
+  it('changeTaskStatus wirft bei HTTP-Fehler mit Status und Operation im Text, ohne Token', async () => {
+    fetchMock.mockImplementation(async () => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      headers: { get: () => null },
+      text: async () => 'ungültiger Status',
+    }));
+    const client = new AworkClient('GEHEIM-TOKEN', BASE_URL);
+    await expect(client.changeTaskStatus('t-1', 's-x')).rejects.toThrow(/400/);
+    try {
+      await client.changeTaskStatus('t-1', 's-x');
+    } catch (fehler) {
+      expect(String(fehler)).not.toContain('GEHEIM-TOKEN');
+      expect(String(fehler)).toContain('changestatuses');
+    }
+  });
+
+  it('getTask mappt id/name/taskStatusId/taskStatus/projectId/isRecurring', async () => {
+    const calls = fakeFetch(200, {
+      id: 't-9',
+      name: 'Migration prüfen',
+      taskStatusId: 's-done',
+      taskStatus: { id: 's-done', name: 'Erledigt', type: 'done' },
+      projectId: 'proj-intern',
+      isRecurring: true,
+    });
+    const client = new AworkClient('T', BASE_URL);
+    const result = await client.getTask('t-9');
+    expect(result).toEqual({
+      id: 't-9',
+      name: 'Migration prüfen',
+      taskStatusId: 's-done',
+      taskStatus: { id: 's-done', name: 'Erledigt', type: 'done' },
+      projectId: 'proj-intern',
+      isRecurring: true,
+    });
+    expect(calls[0].url).toBe(`${BASE_URL}/tasks/t-9`);
+  });
+
+  it('getTask liefert null bei 404', async () => {
+    fetchMock.mockImplementation(async () => ({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      headers: { get: () => null },
+      text: async () => 'nicht gefunden',
+    }));
+    const client = new AworkClient('T', BASE_URL);
+    expect(await client.getTask('unbekannt')).toBeNull();
+  });
+
+  it('createTaskComment schickt POST /tasks/{id}/comments mit {message, userId}', async () => {
+    const calls = fakeFetch(200, { id: 'c-1' });
+    const client = new AworkClient('T', BASE_URL);
+    await client.createTaskComment('t-1', 'Erledigt via Teamboard', 'u-jan');
+    expect(calls[0].url).toBe(`${BASE_URL}/tasks/t-1/comments`);
+    expect(calls[0].init.method).toBe('POST');
+    expect(JSON.parse(calls[0].init.body)).toEqual({ message: 'Erledigt via Teamboard', userId: 'u-jan' });
   });
 
   // ─── getTimeEntriesForRange / getTimeEntriesForDay ──────────

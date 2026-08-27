@@ -275,6 +275,76 @@ describe("erstelleBoardLader", () => {
     expect(dritter.board.lanes[0].name).toBe("Lea Stöber");
     expect(client.zustand.aufrufe).toBe(3);
   });
+
+  it("holt nach verwerfen() frisch ab, obwohl die TTL noch läuft", async () => {
+    const client = fakeClient();
+    let ms = 0;
+    const lade = erstelleBoardLader({
+      client,
+      ttlMs: 30_000,
+      jetztFn: () => new Date(1_756_200_000_000 + ms),
+    });
+    await lade();
+    ms = 10_000;
+    await lade();
+    expect(client.zustand.aufrufe).toBe(1); // Cache-Treffer
+
+    lade.verwerfen();
+    const frisch = await lade();
+    expect(client.zustand.aufrufe).toBe(2);
+    expect(frisch.alterSekunden).toBe(0);
+  });
+
+  it("holt nach verwerfen() auch bei offenem Fehler-Backoff frisch ab, statt den Stale-Stand zu liefern", async () => {
+    const client = fakeClient();
+    let ms = 0;
+    const lade = erstelleBoardLader({
+      client,
+      ttlMs: 1_000,
+      jetztFn: () => new Date(1_756_200_000_000 + ms),
+    });
+    await lade();
+
+    client.zustand.wirft = true;
+    ms = 2_000; // TTL abgelaufen -> Fehlschlag, Backoff-Frist bis 3_000
+    await lade();
+    expect(client.zustand.aufrufe).toBe(2);
+
+    ms = 2_100;
+    await lade();
+    expect(client.zustand.aufrufe).toBe(2); // Backoff: Stale-Stand ohne neuen Versuch
+
+    // Nach dem eigenen Erledigt-Klick MUSS neu geholt werden — sonst sähe der
+    // Nutzer seine gerade erledigte Aufgabe weiter im Board.
+    client.zustand.wirft = false;
+    lade.verwerfen();
+    const frisch = await lade();
+    expect(client.zustand.aufrufe).toBe(3);
+    expect(frisch.alterSekunden).toBe(0);
+  });
+
+  it("installiert nach verwerfen() keinen Stand mehr aus einem Abruf, der beim Verwerfen schon flog", async () => {
+    const client = fakeClientVerzoegert();
+    let ms = 0;
+    const lade = erstelleBoardLader({
+      client,
+      ttlMs: 30_000,
+      jetztFn: () => new Date(1_756_200_000_000 + ms),
+    });
+
+    const laufend = lade(); // Abruf startet …
+    expect(client.zustand.aufrufe).toBe(1);
+    lade.verwerfen(); // … Erledigt-Klick mitten hinein …
+    client.freigeben();
+    await laufend; // … und der Abruf landet erst DANACH.
+
+    // Sein Stand stammt von vor dem Statuswechsel: käme er in den Cache,
+    // überschriebe er das Verwerfen sofort wieder und der Nutzer sähe seine
+    // erledigte Aufgabe eine volle TTL lang weiter im Board.
+    ms = 1_000;
+    await lade();
+    expect(client.zustand.aufrufe).toBe(2);
+  });
 });
 
 describe("heuteBerlin", () => {

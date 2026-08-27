@@ -59,6 +59,24 @@ const MIGRATIONS: string[] = [
     reihenfolge TEXT, ausgeblendet TEXT, updated_at TEXT NOT NULL
   );
   `,
+  // v3: Erledigungen (Undo-Zustand, Kommentar-Warteschlange, Protokoll)
+  `
+  CREATE TABLE teamboard_erledigungen (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    task_name TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    alter_status_id TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    awork_user_id TEXT NOT NULL,
+    erledigt_am TEXT NOT NULL,
+    rueckgaengig_am TEXT,
+    kommentar_am TEXT,
+    fehlversuche INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX idx_erledigungen_offen ON teamboard_erledigungen (kommentar_am, rueckgaengig_am, erledigt_am);
+  CREATE INDEX idx_erledigungen_task ON teamboard_erledigungen (task_id, rueckgaengig_am, kommentar_am);
+  `,
 ];
 
 export function openDb(filePath: string): DatabaseSync {

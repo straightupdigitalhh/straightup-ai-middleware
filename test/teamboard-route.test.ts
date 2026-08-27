@@ -10,6 +10,8 @@ import { SessionStore } from '../src/core/sessions.js';
 import { createAuthRouter } from '../src/routes/auth.js';
 import { TeamboardEinstellungenStore } from '../src/core/teamboard-einstellungen.js';
 import type { ZeitenProNutzer } from '../src/services/teamboard/zeiten.js';
+import { UNDO_FENSTER_MS } from '../src/core/teamboard-erledigungen.js';
+import type { ErledigenFehler, RueckgaengigFehler } from '../src/services/teamboard/erledigen.js';
 
 const MASTER_KEY = 'master-key';
 
@@ -41,12 +43,28 @@ function fakeEinstellungenStore() {
   };
 }
 
+// Fake Erledigen-Dienst (T4) — die Route ruft nur erledige/macheRueckgaengig,
+// per default beide erfolgreich; einzelne Tests überschreiben mit anderem
+// Verhalten (Fehler-Union oder werfende Promise für den 502-Zweig). Typ direkt
+// aus der Router-Signatur abgeleitet (wie deps unten), damit vi.fn() an den
+// Aufrufstellen kontextuell auf die richtige Signatur typisiert wird.
+function fakeErledigenDienst(
+  overrides: Partial<Parameters<typeof createTeamboardRouter>[0]['erledigenDienst']> = {},
+) {
+  return {
+    erledige: vi.fn().mockResolvedValue({ ok: true, vorgangId: 1 }),
+    macheRueckgaengig: vi.fn().mockResolvedValue({ ok: true }),
+    ...overrides,
+  };
+}
+
 function makeDeps(overrides: Partial<Parameters<typeof createTeamboardRouter>[0]> = {}) {
   return {
     ladeBoard: vi.fn().mockResolvedValue(boardStandFixture),
     ladeZeiten: vi.fn().mockResolvedValue(zeitenFixture),
     ladeNutzerBild: vi.fn().mockResolvedValue(null),
     einstellungen: fakeEinstellungenStore(),
+    erledigenDienst: fakeErledigenDienst(),
     ...overrides,
   };
 }
@@ -77,18 +95,42 @@ function memberAuth(aworkUserId: string | null): AuthContext {
 // ─── (a) GET /board ────────────────────────────────────────────────
 
 describe('GET /api/teamboard/board', () => {
-  it('via api-key ⇒ 200 + BoardStand-JSON', async () => {
+  it('via api-key ⇒ 200 + BoardStand-JSON, betrachter null (keine Nutzeridentität)', async () => {
     const deps = makeDeps();
     const res = await request(makeApp(deps, apiKeyAuth)).get('/api/teamboard/board');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(boardStandFixture);
+    expect(res.body).toEqual({ ...boardStandFixture, betrachter: null });
   });
 
-  it('via session ⇒ 200 + BoardStand-JSON', async () => {
+  it('via session ⇒ 200 + BoardStand-JSON samt Betrachter', async () => {
     const deps = makeDeps();
     const res = await request(makeApp(deps, adminSession)).get('/api/teamboard/board');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(boardStandFixture);
+    expect(res.body).toEqual({ ...boardStandFixture, betrachter: { aworkUserId: null, istAdmin: true } });
+  });
+
+  // Der Board-Cache ist für alle Betrachter derselbe (BoardStand trägt keine
+  // Identität) — wer zusieht, hängt die Route nutzerabhängig an, wie /zeiten.
+  it('Member mit awork-Mapping ⇒ eigene awork-ID, istAdmin false', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea'))).get('/api/teamboard/board');
+    expect(res.status).toBe(200);
+    expect(res.body.betrachter).toEqual({ aworkUserId: 'u-lea', istAdmin: false });
+    expect(res.body.board).toEqual(boardStandFixture.board);
+  });
+
+  it('Member ohne awork-Mapping ⇒ aworkUserId null (der Client zeigt dann keinen Erledigt-Knopf)', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth(null))).get('/api/teamboard/board');
+    expect(res.status).toBe(200);
+    expect(res.body.betrachter).toEqual({ aworkUserId: null, istAdmin: false });
+  });
+
+  it('setzt Cache-Control: private, no-store — die Antwort trägt seit Task 8 Nutzeridentität und darf in keinem gemeinsamen Cache landen (M1)', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea'))).get('/api/teamboard/board');
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('private, no-store');
   });
 
   it('werfender ladeBoard ⇒ 502 mit clientErrorMessage-Body, kein Stacktrace', async () => {
@@ -338,5 +380,375 @@ describe('Muster A: echter Session-Login trägt awork_user_id bis res.locals.aut
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ zeiten: { 'u-lea': zeitenFixture['u-lea'] }, hinweis: null });
     expect(Object.keys(res.body.zeiten)).toEqual(['u-lea']);
+  });
+});
+
+describe('Muster A: /board hängt den Betrachter je Session an, der Board-Stand bleibt für alle gleich', () => {
+  it('zwei verschiedene Sessions ⇒ zwei verschiedene betrachter, via api-key ⇒ null', async () => {
+    const { app, admin, member } = makeRealApp();
+    const memberCookie = await loginCookie(app, member.email, 'member-pass-123');
+    const adminCookie = await loginCookie(app, admin.email, 'admin-pass-123');
+
+    const alsMember = await request(app).get('/api/teamboard/board').set('Cookie', memberCookie);
+    expect(alsMember.status).toBe(200);
+    expect(alsMember.body.betrachter).toEqual({ aworkUserId: 'u-lea', istAdmin: false });
+
+    const alsAdmin = await request(app).get('/api/teamboard/board').set('Cookie', adminCookie);
+    expect(alsAdmin.status).toBe(200);
+    expect(alsAdmin.body.betrachter).toEqual({ aworkUserId: null, istAdmin: true });
+
+    const perKey = await request(app).get('/api/teamboard/board').set('X-API-Key', MASTER_KEY);
+    expect(perKey.status).toBe(200);
+    expect(perKey.body.betrachter).toBeNull();
+
+    // Derselbe Cache-Inhalt für alle drei — nur der Betrachter unterscheidet sich.
+    expect(alsMember.body.board).toEqual(alsAdmin.body.board);
+    expect(alsMember.body.board).toEqual(perKey.body.board);
+  });
+});
+
+// ─── (g) POST /erledigen ─────────────────────────────────────────
+
+// Alle TEXTE-Werte, die der Router aus dem Brief übernehmen muss — dient als
+// Referenz für die Text-Assertions unten, nicht als Bestandteil der Route.
+const TEXTE_REFERENZ: Record<ErledigenFehler | RueckgaengigFehler, string> = {
+  nicht_gefunden: 'Diese Aufgabe gibt es in awork nicht mehr.',
+  keine_berechtigung: 'Du bist für diese Aufgabe nicht zuständig.',
+  schon_erledigt: 'Die Aufgabe ist bereits erledigt.',
+  laeuft_bereits: 'Für diese Aufgabe läuft gerade schon ein Erledigen-Vorgang.',
+  nicht_erledigbar: 'Diese Aufgabe hat kein Projekt oder keinen Status — sie lässt sich hier nicht erledigen.',
+  kein_done_status: 'Dieses Projekt hat keine Erledigt-Spalte.',
+  nicht_gewechselt: 'awork hat den Status nicht übernommen. Bitte in awork nachsehen.',
+  fenster_abgelaufen: 'Das Zeitfenster zum Rückgängigmachen ist abgelaufen.',
+  schon_rueckgaengig: 'Dieser Vorgang wurde bereits rückgängig gemacht.',
+};
+
+describe('POST /api/teamboard/erledigen', () => {
+  it('(a) via api-key ⇒ 403 (Master-Key hat keine Identität), Dienst nicht gerufen', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, apiKeyAuth))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 'task-1' });
+    expect(res.status).toBe(403);
+    expect(deps.erledigenDienst.erledige).not.toHaveBeenCalled();
+  });
+
+  it('(b) Session ohne aworkUserId ⇒ 403 mit Hinweistext, Dienst nicht gerufen', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth(null)))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 'task-1' });
+    expect(res.status).toBe(403);
+    expect(typeof res.body.message).toBe('string');
+    expect(res.body.message.length).toBeGreaterThan(0);
+    expect(deps.erledigenDienst.erledige).not.toHaveBeenCalled();
+  });
+
+  it('(c) Body ohne taskId ⇒ 400, Dienst nicht gerufen', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/erledigen')
+      .send({});
+    expect(res.status).toBe(400);
+    expect(deps.erledigenDienst.erledige).not.toHaveBeenCalled();
+  });
+
+  it('(c) Body mit falschem taskId-Typ (Zahl statt String) ⇒ 400, Dienst nicht gerufen', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 123 });
+    expect(res.status).toBe(400);
+    expect(deps.erledigenDienst.erledige).not.toHaveBeenCalled();
+  });
+
+  it('(d) Dienst liefert keine_berechtigung ⇒ 403 mit TEXTE-Text', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        erledige: vi.fn().mockResolvedValue({ ok: false, fehler: 'keine_berechtigung' }),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 'task-1' });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toBe(TEXTE_REFERENZ.keine_berechtigung);
+  });
+
+  it('(d) Dienst liefert nicht_gefunden ⇒ 404 mit TEXTE-Text', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        erledige: vi.fn().mockResolvedValue({ ok: false, fehler: 'nicht_gefunden' }),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 'task-1' });
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe(TEXTE_REFERENZ.nicht_gefunden);
+  });
+
+  it('(d) Dienst liefert nicht_gewechselt ⇒ 409 mit TEXTE-Text', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        erledige: vi.fn().mockResolvedValue({ ok: false, fehler: 'nicht_gewechselt' }),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 'task-1' });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toBe(TEXTE_REFERENZ.nicht_gewechselt);
+  });
+
+  it.each(['schon_erledigt', 'laeuft_bereits', 'nicht_erledigbar', 'kein_done_status'] as const)(
+    '(d) Dienst liefert %s ⇒ ebenfalls 409 (alle übrigen Fehler)',
+    async (fehler) => {
+      const deps = makeDeps({
+        erledigenDienst: fakeErledigenDienst({
+          erledige: vi.fn().mockResolvedValue({ ok: false, fehler }),
+        }),
+      });
+      const res = await request(makeApp(deps, memberAuth('u-lea')))
+        .post('/api/teamboard/erledigen')
+        .send({ taskId: 'task-1' });
+      expect(res.status).toBe(409);
+      expect(res.body.message).toBe(TEXTE_REFERENZ[fehler]);
+    },
+  );
+
+  it('(d) Dienst wirft (awork-Ausnahme) ⇒ 502, clientErrorMessage-Body, kein Stacktrace', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        erledige: vi.fn().mockRejectedValue(new Error('awork API 500: geheimer Pfad /interna')),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 'task-1' });
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: 'awork_unreachable', message: GENERIC_ERROR_MESSAGE });
+    expect(JSON.stringify(res.body)).not.toContain('geheimer Pfad');
+    expect(res.body).not.toHaveProperty('stack');
+  });
+
+  it('(e) Erfolg ⇒ 200 mit vorgangId und undoSekunden = UNDO_FENSTER_MS / 1000', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        erledige: vi.fn().mockResolvedValue({ ok: true, vorgangId: 42 }),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 'task-1' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ vorgangId: 42, undoSekunden: UNDO_FENSTER_MS / 1000 });
+  });
+
+  it('ruft den Dienst mit userId, aworkUserId und istAdmin aus der Session', async () => {
+    const deps = makeDeps();
+    await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 'task-1' });
+    expect(deps.erledigenDienst.erledige).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      userId: 'member-1',
+      aworkUserId: 'u-lea',
+      istAdmin: false,
+    });
+  });
+
+  it('Admin-Session ⇒ istAdmin: true am Dienst', async () => {
+    const adminMitMapping: AuthContext = {
+      via: 'session',
+      role: 'admin',
+      user: { id: 'admin-1', email: 'jan@x.de', name: 'Jan', role: 'admin', disabledAt: null, createdAt: '2026-01-01', aworkUserId: 'u-jan' },
+    };
+    const deps = makeDeps();
+    await request(makeApp(deps, adminMitMapping))
+      .post('/api/teamboard/erledigen')
+      .send({ taskId: 'task-1' });
+    expect(deps.erledigenDienst.erledige).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      userId: 'admin-1',
+      aworkUserId: 'u-jan',
+      istAdmin: true,
+    });
+  });
+});
+
+// ─── (h) POST /rueckgaengig ───────────────────────────────────────
+
+describe('POST /api/teamboard/rueckgaengig', () => {
+  it('(a) via api-key ⇒ 403 (Master-Key hat keine Identität), Dienst nicht gerufen', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, apiKeyAuth))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: 1 });
+    expect(res.status).toBe(403);
+    expect(deps.erledigenDienst.macheRueckgaengig).not.toHaveBeenCalled();
+  });
+
+  it('(h) fehlendes vorgangId ⇒ 400, bevor der Store/Dienst angefasst wird', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({});
+    expect(res.status).toBe(400);
+    expect(deps.erledigenDienst.macheRueckgaengig).not.toHaveBeenCalled();
+  });
+
+  it('(h) nicht-ganzzahliges vorgangId (Float) ⇒ 400, Dienst nicht gerufen', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: 1.5 });
+    expect(res.status).toBe(400);
+    expect(deps.erledigenDienst.macheRueckgaengig).not.toHaveBeenCalled();
+  });
+
+  it('(h) vorgangId als String ⇒ 400, Dienst nicht gerufen', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: '1' });
+    expect(res.status).toBe(400);
+    expect(deps.erledigenDienst.macheRueckgaengig).not.toHaveBeenCalled();
+  });
+
+  it('Dienst liefert keine_berechtigung ⇒ 403 mit TEXTE-Text', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        macheRueckgaengig: vi.fn().mockResolvedValue({ ok: false, fehler: 'keine_berechtigung' }),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: 1 });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toBe(TEXTE_REFERENZ.keine_berechtigung);
+  });
+
+  it('Dienst liefert nicht_gefunden ⇒ 404 mit TEXTE-Text', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        macheRueckgaengig: vi.fn().mockResolvedValue({ ok: false, fehler: 'nicht_gefunden' }),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: 1 });
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe(TEXTE_REFERENZ.nicht_gefunden);
+  });
+
+  it('(f) Dienst liefert fenster_abgelaufen ⇒ 409 mit TEXTE-Text', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        macheRueckgaengig: vi.fn().mockResolvedValue({ ok: false, fehler: 'fenster_abgelaufen' }),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: 1 });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toBe(TEXTE_REFERENZ.fenster_abgelaufen);
+  });
+
+  it('(f) Dienst liefert schon_rueckgaengig ⇒ 409 mit TEXTE-Text', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        macheRueckgaengig: vi.fn().mockResolvedValue({ ok: false, fehler: 'schon_rueckgaengig' }),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: 1 });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toBe(TEXTE_REFERENZ.schon_rueckgaengig);
+  });
+
+  it('Dienst wirft (awork-Ausnahme) ⇒ 502, clientErrorMessage-Body, kein Stacktrace', async () => {
+    const deps = makeDeps({
+      erledigenDienst: fakeErledigenDienst({
+        macheRueckgaengig: vi.fn().mockRejectedValue(new Error('awork API 500: geheimer Pfad /interna')),
+      }),
+    });
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: 1 });
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: 'awork_unreachable', message: GENERIC_ERROR_MESSAGE });
+    expect(JSON.stringify(res.body)).not.toContain('geheimer Pfad');
+    expect(res.body).not.toHaveProperty('stack');
+  });
+
+  it('(f) Erfolg ⇒ 200 { ok: true }', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it('ruft den Dienst mit vorgangId und userId aus der Session', async () => {
+    const deps = makeDeps();
+    await request(makeApp(deps, memberAuth('u-lea')))
+      .post('/api/teamboard/rueckgaengig')
+      .send({ vorgangId: 7 });
+    expect(deps.erledigenDienst.macheRueckgaengig).toHaveBeenCalledWith({ vorgangId: 7, userId: 'member-1' });
+  });
+});
+
+// ─── (i) CSRF-Pin (Spec §6) ────────────────────────────────────────
+//
+// Kein eigener CSRF-Token nötig: das Session-Cookie ist sameSite: 'lax'
+// (src/routes/auth.ts) — ein Cross-Site-POST schickt es ohnehin nicht mit,
+// und ganz ohne Cookie greift die /api-Auth mit 401, bevor die Route
+// überhaupt läuft. Dieser Test belegt beide Hälften des Arguments.
+
+describe('CSRF-Pin: Session-Cookie sameSite=lax genügt ohne eigenen Token', () => {
+  it('Login setzt das Session-Cookie mit SameSite=Lax', async () => {
+    const { app, member } = makeRealApp();
+    const res = await request(app).post('/auth/login').send({ email: member.email, password: 'member-pass-123' });
+    expect(res.status).toBe(200);
+    expect(String(res.headers['set-cookie'])).toMatch(/SameSite=Lax/i);
+  });
+
+  it('POST /api/teamboard/erledigen ohne Session-Cookie ⇒ 401 aus der /api-Auth (nicht aus dem Handler)', async () => {
+    const { app, deps } = makeRealApp();
+    const res = await request(app).post('/api/teamboard/erledigen').send({ taskId: 'task-1' });
+    expect(res.status).toBe(401);
+    expect(deps.erledigenDienst.erledige).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/teamboard/rueckgaengig ohne Session-Cookie ⇒ 401 aus der /api-Auth (nicht aus dem Handler)', async () => {
+    const { app, deps } = makeRealApp();
+    const res = await request(app).post('/api/teamboard/rueckgaengig').send({ vorgangId: 1 });
+    expect(res.status).toBe(401);
+    expect(deps.erledigenDienst.macheRueckgaengig).not.toHaveBeenCalled();
+  });
+});
+
+// ─── (g) Muster A: echte Session-Kette für /erledigen ──────────────
+
+describe('Muster A: erledigen mit echtem Member-Login trägt awork_user_id bis zum Dienst', () => {
+  it('Member-Login erledigt eine eigene Aufgabe durch die volle Session-Kette', async () => {
+    const { app, member, deps } = makeRealApp();
+    const cookie = await loginCookie(app, member.email, 'member-pass-123');
+
+    const res = await request(app)
+      .post('/api/teamboard/erledigen')
+      .set('Cookie', cookie)
+      .send({ taskId: 'task-1' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ vorgangId: 1, undoSekunden: UNDO_FENSTER_MS / 1000 });
+    expect(deps.erledigenDienst.erledige).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      userId: member.id,
+      aworkUserId: 'u-lea',
+      istAdmin: false,
+    });
   });
 });

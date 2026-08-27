@@ -1,15 +1,55 @@
 import { Router, Request, Response, RequestHandler } from 'express';
-import { getAuth, requireAdmin } from '../services/auth.js';
+import { getAuth, requireAdmin, type AuthContext } from '../services/auth.js';
 import { clientErrorMessage } from '../services/errors.js';
 import type { BoardLader, BoardStand } from '../services/teamboard/daten.js';
 import type { ZeitenProNutzer } from '../services/teamboard/zeiten.js';
+import type { ErledigenFehler, RueckgaengigFehler } from '../services/teamboard/erledigen.js';
+import type { Betrachter } from '../services/teamboard/seite.js';
 import type { TeamboardEinstellungen, TeamboardEinstellungenStore } from '../core/teamboard-einstellungen.js';
+import { UNDO_FENSTER_MS } from '../core/teamboard-erledigungen.js';
+
+/** Nur die zwei Methoden, die die Route tatsächlich braucht (T4, `erstelleErledigenDienst`). */
+interface ErledigenDienst {
+  erledige(a: { taskId: string; userId: string; aworkUserId: string; istAdmin: boolean }): Promise<
+    { ok: true; vorgangId: number } | { ok: false; fehler: ErledigenFehler }
+  >;
+  macheRueckgaengig(a: { vorgangId: number; userId: string }): Promise<
+    { ok: true } | { ok: false; fehler: RueckgaengigFehler }
+  >;
+}
 
 interface Deps {
   ladeBoard: BoardLader;
   ladeZeiten: () => Promise<ZeitenProNutzer>;
   ladeNutzerBild: (userId: string) => Promise<{ typ: string; bytes: Buffer } | null>;
   einstellungen: TeamboardEinstellungenStore;
+  erledigenDienst: ErledigenDienst;
+}
+
+// ─── Fehler-Zuordnung & Texte für /erledigen und /rueckgaengig ────
+//
+// Der Dienst wirft in den fachlichen Fällen nicht, sondern gibt ein
+// Ergebnisobjekt zurück — clientErrorMessage (nur für den 502-Zweig aus
+// echten awork-Ausnahmen gedacht) würde hier für jeden Fall dieselbe
+// generische Meldung liefern. Ein gemeinsamer Record deckt beide Fehler-
+// Unions ab, weil sie sich in drei Werten überschneiden.
+
+const TEXTE: Record<ErledigenFehler | RueckgaengigFehler, string> = {
+  nicht_gefunden: 'Diese Aufgabe gibt es in awork nicht mehr.',
+  keine_berechtigung: 'Du bist für diese Aufgabe nicht zuständig.',
+  schon_erledigt: 'Die Aufgabe ist bereits erledigt.',
+  laeuft_bereits: 'Für diese Aufgabe läuft gerade schon ein Erledigen-Vorgang.',
+  nicht_erledigbar: 'Diese Aufgabe hat kein Projekt oder keinen Status — sie lässt sich hier nicht erledigen.',
+  kein_done_status: 'Dieses Projekt hat keine Erledigt-Spalte.',
+  nicht_gewechselt: 'awork hat den Status nicht übernommen. Bitte in awork nachsehen.',
+  fenster_abgelaufen: 'Das Zeitfenster zum Rückgängigmachen ist abgelaufen.',
+  schon_rueckgaengig: 'Dieser Vorgang wurde bereits rückgängig gemacht.',
+};
+
+function fehlerStatus(fehler: ErledigenFehler | RueckgaengigFehler): number {
+  if (fehler === 'keine_berechtigung') return 403;
+  if (fehler === 'nicht_gefunden') return 404;
+  return 409;
 }
 
 // ─── Avatar-Cache — 1:1 aus agents/teamboard/server.ts (Stufe 1) portiert ─
@@ -48,6 +88,23 @@ function parseEinstellungen(body: unknown): TeamboardEinstellungen | null {
   return { reihenfolge: b.reihenfolge as string[] | null, ausgeblendet: b.ausgeblendet as string[] };
 }
 
+// ─── Betrachter ───────────────────────────────────────────────────
+//
+// BoardStand ist der für alle Betrachter identische Cache-Inhalt und trägt
+// deshalb keine Nutzeridentität. Wer gerade zusieht, hängt die Route
+// nutzerabhängig an — nach dem Muster von /zeiten. Der Master-Key
+// (via 'api-key') hat keine Identität: dort bleibt es bei null, der Client
+// zeigt dann keinen Erledigt-Knopf.
+// Die ANTWORT der Route ist damit seit Task 8 personenbezogen, auch wenn es
+// der Cache-Inhalt nicht ist — sie darf in keinem gemeinsamen Cache landen
+// (siehe Cache-Control in /board, gleiche Begründung wie bei der
+// Avatar-Route).
+
+function betrachterAus(auth: AuthContext | undefined): Betrachter | null {
+  if (!auth || auth.via !== 'session' || !auth.user) return null;
+  return { aworkUserId: auth.user.aworkUserId, istAdmin: auth.role === 'admin' };
+}
+
 /**
  * Router für /api/teamboard/* — läuft hinter der /api-Auth (Session ODER
  * Master-Key). /zeiten und /einstellungen sind personenbezogen und daher
@@ -63,7 +120,7 @@ export function createTeamboardRouter(deps: Deps): Router {
   // Fehler-Backoff fürs Laden: NICHT pro userId, sondern global — ein
   // awork-Ausfall/Rate-Limit betrifft alle Avatare gleichzeitig (dasselbe
   // Token/Limit wie die Board-Daten, vgl. erstelleBoardLader in daten.ts).
-  // Ohne dieses Fenster würde jeder Client-Redraw (alle 30 s je offenem Tab)
+  // Ohne dieses Fenster würde jeder Client-Redraw (alle 10 s je offenem Tab)
   // während eines awork-Ausfalls erneut jeden Avatar ohne Bremse anfragen.
   let avatarFehlerBisMs: number | null = null;
 
@@ -80,7 +137,7 @@ export function createTeamboardRouter(deps: Deps): Router {
         .set('Cache-Control', 'private, max-age=600')
         // private wegen Session-Auth; kurze TTL (s. AVATAR_NEGATIV_TTL_MS) —
         // der Browser fragt nach einem neu hochgeladenen Bild zügig erneut,
-        // hört aber auf, bei jedem 30-s-Redraw sofort wieder nachzufragen.
+        // hört aber auf, bei jedem 10-s-Redraw sofort wieder nachzufragen.
         .status(404)
         .type('text/plain; charset=utf-8')
         .send('Nicht gefunden');
@@ -142,7 +199,12 @@ export function createTeamboardRouter(deps: Deps): Router {
   router.get('/api/teamboard/board', async (_req: Request, res: Response) => {
     try {
       const stand = await deps.ladeBoard();
-      res.json(stand);
+      // private: die Antwort trägt mit betrachter die Identität des
+      // Aufrufers. no-store zusätzlich, weil sich der Board-Stand alle 10 s
+      // ändert und der Client ohnehin in diesem Takt neu fragt.
+      res
+        .set('Cache-Control', 'private, no-store')
+        .json({ ...stand, betrachter: betrachterAus(getAuth(res)) });
     } catch (e: any) {
       console.error(`❌ teamboard: Board laden fehlgeschlagen: ${e?.message ?? e}`);
       res.status(502).json({ error: 'awork_unreachable', message: clientErrorMessage(e) });
@@ -243,6 +305,79 @@ export function createTeamboardRouter(deps: Deps): Router {
     }
   });
 
+  // ─── Erledigen / Rückgängig ───────────────────────────────────
+  //
+  // Beide Routen sind nur per Session erreichbar: der Master-Key
+  // (via: 'api-key') hat keine Nutzeridentität — genau die, die der Dienst
+  // für Zuständigkeits- und Urheberprüfung braucht. Die Prüfung steht VOR
+  // jeder Dereferenz von auth.user, sonst crasht die Route für api-key-
+  // Aufrufer statt sauber 403 zu antworten. Kein eigenes CSRF-Token nötig:
+  // das Session-Cookie ist sameSite: 'lax' (routes/auth.ts) — ein Cross-
+  // Site-POST schickt es ohnehin nicht mit (Beleg: test/teamboard-route.test.ts).
+
+  router.post('/api/teamboard/erledigen', async (req: Request, res: Response) => {
+    try {
+      const auth = getAuth(res);
+      if (!auth || auth.via !== 'session') {
+        res.status(403).json({ error: 'forbidden', message: 'Nur per Session-Login' });
+        return;
+      }
+      const aworkUserId = auth.user!.aworkUserId;
+      if (!aworkUserId) {
+        res.status(403).json({
+          error: 'forbidden',
+          message: 'Für dein Konto ist keine awork-Nutzer-ID hinterlegt — bitte im Hub verknüpfen.',
+        });
+        return;
+      }
+      const { taskId } = req.body ?? {};
+      if (typeof taskId !== 'string' || !taskId) {
+        res.status(400).json({ error: 'validation', message: 'taskId ist Pflichtfeld (string)' });
+        return;
+      }
+
+      const ergebnis = await deps.erledigenDienst.erledige({
+        taskId,
+        userId: auth.user!.id,
+        aworkUserId,
+        istAdmin: auth.role === 'admin',
+      });
+      if (ergebnis.ok) {
+        res.status(200).json({ vorgangId: ergebnis.vorgangId, undoSekunden: UNDO_FENSTER_MS / 1000 });
+        return;
+      }
+      res.status(fehlerStatus(ergebnis.fehler)).json({ error: ergebnis.fehler, message: TEXTE[ergebnis.fehler] });
+    } catch (e: any) {
+      console.error(`❌ teamboard: Aufgabe erledigen fehlgeschlagen: ${e?.message ?? e}`);
+      res.status(502).json({ error: 'awork_unreachable', message: clientErrorMessage(e) });
+    }
+  });
+
+  router.post('/api/teamboard/rueckgaengig', async (req: Request, res: Response) => {
+    try {
+      const auth = getAuth(res);
+      if (!auth || auth.via !== 'session') {
+        res.status(403).json({ error: 'forbidden', message: 'Nur per Session-Login' });
+        return;
+      }
+      const { vorgangId } = req.body ?? {};
+      if (typeof vorgangId !== 'number' || !Number.isInteger(vorgangId)) {
+        res.status(400).json({ error: 'validation', message: 'vorgangId ist Pflichtfeld (ganze Zahl)' });
+        return;
+      }
+
+      const ergebnis = await deps.erledigenDienst.macheRueckgaengig({ vorgangId, userId: auth.user!.id });
+      if (ergebnis.ok) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      res.status(fehlerStatus(ergebnis.fehler)).json({ error: ergebnis.fehler, message: TEXTE[ergebnis.fehler] });
+    } catch (e: any) {
+      console.error(`❌ teamboard: Erledigung rückgängig machen fehlgeschlagen: ${e?.message ?? e}`);
+      res.status(502).json({ error: 'awork_unreachable', message: clientErrorMessage(e) });
+    }
+  });
+
   return router;
 }
 
@@ -265,7 +400,7 @@ export function createTeamboardRouter(deps: Deps): Router {
 
 interface PageDeps {
   ladeBoard: BoardLader;
-  renderSeite: (stand: BoardStand) => string;
+  renderSeite: (stand: BoardStand, betrachter: Betrachter | null) => string;
   pageAuth: RequestHandler;
 }
 
@@ -292,7 +427,7 @@ export function createTeamboardPageRouter(deps: PageDeps): Router {
       // renderSeite aufrufen, bevor Headers geschrieben werden, damit ein
       // Fehler dort noch abgefangen werden kann, ohne dass eine teilweise
       // geschriebene Response vorliegt.
-      const html = deps.renderSeite(stand);
+      const html = deps.renderSeite(stand, betrachterAus(getAuth(res)));
       res.set('Cache-Control', 'no-store').status(200).type('text/html; charset=utf-8').send(html);
     } catch (fehler) {
       // Fehler bei renderSeite oder sonst etwas im Handler — nie das
