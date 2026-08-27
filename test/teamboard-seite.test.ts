@@ -550,6 +550,26 @@ describe("renderSeite", () => {
     expect(block).toContain("erledigenLaeuft = true;");
     expect(block).toContain("erledigenLaeuft = false;");
   });
+
+  it("sperrt den Rückgängig-Knopf beim ersten Klick — dasselbe Flag-Muster wie beim Erledigt-Knopf (Ledger)", () => {
+    const html = renderSeite(stand(), null);
+    const bereich = html.split("function baueErledigenBereich(")[1]?.split("\n  }")[0];
+    expect(bereich).toContain("zurueck.disabled = rueckgaengigLaeuft;");
+    expect(bereich).toContain("zurueck.disabled = true;");
+    const block = html.split("function macheRueckgaengig()")[1]?.split("\n  }")[0];
+    expect(block).toContain("if (rueckgaengigLaeuft) return;");
+    expect(block).toContain("rueckgaengigLaeuft = true;");
+    expect(block).toContain("rueckgaengigLaeuft = false;");
+    // Der Fehlerzweig darf den Vorgang nicht blind dereferenzieren: ein
+    // Schließen des Panels währenddessen hat ihn womöglich genullt.
+    expect(block).toContain("if (erledigt !== null) erledigt.vorgangId = null;");
+  });
+
+  it("startet den Undo-Countdown eine Sekunde unter undoSekunden — die Roundtrip-Zeit ist bei Antworteingang schon vergangen (Ledger)", () => {
+    const html = renderSeite(stand(), null);
+    const block = html.split("function erledige(")[1]?.split("\n  }")[0];
+    expect(block).toContain("restSekunden: antwort.koerper.undoSekunden - 1,");
+  });
 });
 
 describe("uhrText (P1 — reine Funktion, die auch im Client-Skript läuft)", () => {

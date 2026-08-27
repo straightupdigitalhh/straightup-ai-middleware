@@ -474,6 +474,12 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
   // der zweite Versuch bekäme "laeuft_bereits" und schriebe seinen
   // Fehlertext über einen laufenden, funktionierenden Countdown.
   var erledigenLaeuft = false;
+  // Läuft gerade ein /rueckgaengig-POST? Dasselbe Muster, aus demselben
+  // Grund: bei einem Doppelklick träfe die Erfolgsantwort des ersten POST
+  // zuerst ein und gäbe den Vorgang frei; der Fehler-Handler des zweiten
+  // liefe danach in einen TypeError auf dem bereits genullten Objekt, den
+  // das .catch() lautlos verschluckt.
+  var rueckgaengigLaeuft = false;
   // Text der letzten Fehlerantwort — IMMER die message aus der Serverantwort,
   // nie ein im Client erfundener Text. Einzige Ausnahme: kam gar keine
   // Antwort an (Netzwerkfehler im .catch), gibt es keine message, und ohne
@@ -993,7 +999,11 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
         // (undoSekunden) — im Client steht keine Fensterlänge.
         var zurueck = el("button", "erledigt-btn", "Rückgängig (" + erledigt.restSekunden + " s)");
         zurueck.type = "button";
+        // Sperre überlebt ein Neuzeichnen während des laufenden POST — der
+        // Ticker baut das Panel jede Sekunde neu auf.
+        zurueck.disabled = rueckgaengigLaeuft;
         zurueck.addEventListener("click", function () {
+          zurueck.disabled = true;
           macheRueckgaengig();
         });
         bereich.appendChild(zurueck);
@@ -1085,7 +1095,12 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
           aufgabe: aufgabe,
           laneName: laneName,
           vorgangId: antwort.koerper.vorgangId,
-          restSekunden: antwort.koerper.undoSekunden,
+          // Eine Sekunde unter dem Serverfenster: bis diese Antwort eintrifft,
+          // ist die Roundtrip-Zeit schon vergangen, der Server rechnet aber
+          // ab seinem eigenen erledigt_am. Ohne den Abzug zeigte der
+          // Countdown in seiner letzten Sekunde ein Fenster an, dessen
+          // Rückgängig-Klick serverseitig zu spät käme.
+          restSekunden: antwort.koerper.undoSekunden - 1,
         };
         if (undoTicker !== null) clearInterval(undoTicker);
         undoTicker = setInterval(tickeUndo, 1000);
@@ -1107,6 +1122,8 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
 
   function macheRueckgaengig() {
     if (erledigt === null || erledigt.vorgangId === null) return;
+    if (rueckgaengigLaeuft) return;
+    rueckgaengigLaeuft = true;
     panelFehlerText = null;
     fetch("/api/teamboard/rueckgaengig", {
       method: "POST",
@@ -1123,6 +1140,7 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
         });
       })
       .then(function (antwort) {
+        rueckgaengigLaeuft = false;
         if (!antwort) return;
         if (!antwort.ok) {
           // Servertext zeigen und den Countdown beenden: die Aufgabe bleibt
@@ -1133,7 +1151,10 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
             clearInterval(undoTicker);
             undoTicker = null;
           }
-          erledigt.vorgangId = null;
+          // Der Vorgang kann inzwischen weg sein (Schließen-Knopf während des
+          // laufenden POST ruft beendeUndo) — ohne die Prüfung stünde hier
+          // ein TypeError, den das .catch() lautlos schluckt.
+          if (erledigt !== null) erledigt.vorgangId = null;
           fuellePanel();
           return;
         }
@@ -1143,6 +1164,7 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
         nachladen();
       })
       .catch(function (fehler) {
+        rueckgaengigLaeuft = false;
         console.warn("teamboard: Rückgängig fehlgeschlagen", fehler);
       });
   }
