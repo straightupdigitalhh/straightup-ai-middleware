@@ -59,6 +59,15 @@ export function erstelleErledigenDienst(opts: {
    */
   const doneStatusCache = new Map<string, string>();
 
+  /**
+   * taskIds, für die gerade ein erledige() zwischen Prüfung und store.anlegen
+   * hängt. Der DB-Blick allein reicht nicht: zwischen findeOffenenVorgang und
+   * anlegen liegen mehrere await, zwei gleichzeitige Anfragen sähen also beide
+   * keinen offenen Vorgang und legten beide einen an — mit zwei Zurechnungs-
+   * kommentaren in awork für dieselbe Aufgabe als Folge.
+   */
+  const laufendeAufgaben = new Set<string>();
+
   async function loeseDoneStatus(projectId: string): Promise<string | null> {
     const gemerkt = doneStatusCache.get(projectId);
     if (gemerkt) return gemerkt;
@@ -95,11 +104,29 @@ export function erstelleErledigenDienst(opts: {
     }
 
     // 2. Doppelklick-Schutz: ein offener Vorgang würde sonst zu zwei
-    //    Kommentaren für dieselbe Aufgabe führen.
-    if (opts.store.findeOffenenVorgang(a.taskId, MAX_KOMMENTAR_FEHLVERSUCHE)) {
+    //    Kommentaren für dieselbe Aufgabe führen. Prüfen und Eintragen laufen
+    //    ohne dazwischenliegendes await — nur so fängt der Schutz auch zwei
+    //    echt gleichzeitige Anfragen ab.
+    if (
+      opts.store.findeOffenenVorgang(a.taskId, MAX_KOMMENTAR_FEHLVERSUCHE) ||
+      laufendeAufgaben.has(a.taskId)
+    ) {
       return { ok: false, fehler: "laeuft_bereits" };
     }
+    laufendeAufgaben.add(a.taskId);
+    try {
+      return await erledigeGeprueft(a);
+    } finally {
+      laufendeAufgaben.delete(a.taskId);
+    }
+  }
 
+  /** Schritte 3–6 — läuft nur mit Eintrag in laufendeAufgaben. */
+  async function erledigeGeprueft(a: {
+    taskId: string;
+    userId: string;
+    aworkUserId: string;
+  }): Promise<{ ok: true; vorgangId: number } | { ok: false; fehler: ErledigenFehler }> {
     // 3. Echter Vorher-Zustand — VOR jedem Schreibaufruf.
     const vorher = await opts.awork.getTask(a.taskId);
     if (!vorher) return { ok: false, fehler: "nicht_gefunden" };
@@ -118,8 +145,25 @@ export function erstelleErledigenDienst(opts: {
     // 5. Schreiben und nachlesen: changeTaskStatus antwortet 204 mit leerem
     //    Body — ein ausbleibender Fehler beweist den Wechsel NICHT.
     await opts.awork.changeTaskStatus(a.taskId, doneStatusId);
-    const nachher = await opts.awork.getTask(a.taskId);
-    if (nachher?.taskStatus?.type !== "done") return { ok: false, fehler: "nicht_gewechselt" };
+    let nachher: Awaited<ReturnType<typeof opts.awork.getTask>> = null;
+    let nachleseGescheitert = false;
+    try {
+      nachher = await opts.awork.getTask(a.taskId);
+    } catch (fehler) {
+      // Der Wechsel ist bereits raus — nur die Bestätigung fehlt. Hier
+      // abzubrechen hiesse: Aufgabe in awork womöglich erledigt, aber kein
+      // Vorgang gespeichert, also kein Undo und nie ein Kommentar. Ein still
+      // verlorenes Undo wiegt schwerer als ein unbestätigter Wechsel, darum
+      // wird der Vorgang trotzdem angelegt.
+      nachleseGescheitert = true;
+      console.error(
+        `teamboard: Nachlesen nach Statuswechsel an Aufgabe ${a.taskId} fehlgeschlagen —`,
+        fehler instanceof Error ? fehler.message : String(fehler),
+      );
+    }
+    if (!nachleseGescheitert && nachher?.taskStatus?.type !== "done") {
+      return { ok: false, fehler: "nicht_gewechselt" };
+    }
 
     // 6. Protokollieren (mit der in Schritt 3 gelesenen alten Status-ID) und
     //    den Board-Cache verwerfen.
@@ -143,7 +187,10 @@ export function erstelleErledigenDienst(opts: {
     if (!vorgang) return { ok: false, fehler: "nicht_gefunden" };
     // Nur der Urheber — auch ein Admin nimmt fremde Klicks nicht zurück.
     if (vorgang.userId !== a.userId) return { ok: false, fehler: "keine_berechtigung" };
-    if (Date.now() - Date.parse(vorgang.erledigtAm) > UNDO_FENSTER_MS) {
+    // >= statt >: offeneKommentare() greift ab erledigt_am <= jetzt - vorMs.
+    // Bei exakt erreichter Grenze wären sonst Undo und Kommentarschreiben
+    // gleichzeitig zulässig.
+    if (Date.now() - Date.parse(vorgang.erledigtAm) >= UNDO_FENSTER_MS) {
       return { ok: false, fehler: "fenster_abgelaufen" };
     }
     if (vorgang.rueckgaengigAm !== null) return { ok: false, fehler: "schon_rueckgaengig" };

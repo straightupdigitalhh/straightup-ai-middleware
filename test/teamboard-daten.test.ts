@@ -322,6 +322,29 @@ describe("erstelleBoardLader", () => {
     expect(client.zustand.aufrufe).toBe(3);
     expect(frisch.alterSekunden).toBe(0);
   });
+
+  it("installiert nach verwerfen() keinen Stand mehr aus einem Abruf, der beim Verwerfen schon flog", async () => {
+    const client = fakeClientVerzoegert();
+    let ms = 0;
+    const lade = erstelleBoardLader({
+      client,
+      ttlMs: 30_000,
+      jetztFn: () => new Date(1_756_200_000_000 + ms),
+    });
+
+    const laufend = lade(); // Abruf startet …
+    expect(client.zustand.aufrufe).toBe(1);
+    lade.verwerfen(); // … Erledigt-Klick mitten hinein …
+    client.freigeben();
+    await laufend; // … und der Abruf landet erst DANACH.
+
+    // Sein Stand stammt von vor dem Statuswechsel: käme er in den Cache,
+    // überschriebe er das Verwerfen sofort wieder und der Nutzer sähe seine
+    // erledigte Aufgabe eine volle TTL lang weiter im Board.
+    ms = 1_000;
+    await lade();
+    expect(client.zustand.aufrufe).toBe(2);
+  });
 });
 
 describe("heuteBerlin", () => {

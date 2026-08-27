@@ -268,6 +268,34 @@ describe("erstelleErledigenDienst", () => {
     expect(cacheVerwerfen).not.toHaveBeenCalled();
   });
 
+  it("(f2) legt den Vorgang trotzdem an, wenn das Nachlesen wirft — sonst ginge das Undo still verloren", async () => {
+    const nutzer = neuerNutzer();
+    const { awork, zustand } = fakeAwork();
+    let getTaskAufrufe = 0;
+    awork.getTask.mockImplementation(async (taskId: string) => {
+      getTaskAufrufe += 1;
+      // Der Wechsel ging durch, nur die Bestätigung scheitert.
+      if (getTaskAufrufe === 2) throw new Error("awork API 503 Service Unavailable");
+      return zustand.aufgaben[taskId] ?? null;
+    });
+    const { dienst, cacheVerwerfen } = baueDienst({ awork, karten: [karte("task-1", ["aw-lea"])] });
+    const stillerLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const ergebnis = await dienst.erledige({
+      taskId: "task-1",
+      userId: nutzer.id,
+      aworkUserId: "aw-lea",
+      istAdmin: false,
+    });
+    stillerLog.mockRestore();
+
+    expect(ergebnis.ok).toBe(true);
+    expect(awork.changeTaskStatus).toHaveBeenCalledTimes(1);
+    const vorgang = store.finde((ergebnis as { ok: true; vorgangId: number }).vorgangId)!;
+    expect(vorgang.alterStatusId).toBe(STATUS.arbeit.id); // Undo bleibt möglich
+    expect(cacheVerwerfen).toHaveBeenCalledTimes(1);
+  });
+
   it("(g) fragt den done-Status je Projekt nur einmal ab, cacht eine gescheiterte Auflösung aber nicht", async () => {
     const nutzer = neuerNutzer();
     const { awork, zustand } = fakeAwork({
@@ -302,18 +330,32 @@ describe("erstelleErledigenDienst", () => {
     expect(awork.getTaskStatuses).toHaveBeenCalledTimes(2);
   });
 
-  it("(j) speichert die alte Status-ID aus getTask, nicht den Stand der (bis zu 60s alten) Board-Karte", async () => {
+  it("(j) nimmt Status-ID, Namen und Projekt aus getTask — nie aus der (bis zu 60s alten) Board-Karte", async () => {
     const nutzer = neuerNutzer();
-    // Die Karte behauptet noch "In Bearbeitung" (Status A), awork steht
-    // inzwischen auf "Zu erledigen" (Status B) — jemand hat verschoben.
+    // Die Karte ist in JEDEM Feld veraltet, das in den Schreibpfad passt:
+    // anderer Status (jemand hat verschoben), alter Name, altes Projekt.
+    // awork ist die Wahrheit für alles, was zurückgeschrieben oder
+    // protokolliert wird; die Karte entscheidet nur die Berechtigung.
     const { awork } = fakeAwork({
       aufgaben: {
-        "task-1": aworkAufgabe("task-1", { taskStatusId: STATUS.offen.id, taskStatus: STATUS.offen }),
+        "task-1": aworkAufgabe("task-1", {
+          name: "Aufgabe task-1",
+          projectId: "proj-1",
+          taskStatusId: STATUS.offen.id,
+          taskStatus: STATUS.offen,
+        }),
       },
     });
     const { dienst } = baueDienst({
       awork,
-      karten: [karte("task-1", ["aw-lea"], { statusName: "In Bearbeitung", statusTyp: "progress" })],
+      karten: [
+        karte("task-1", ["aw-lea"], {
+          name: "ALTER NAME AUS DEM CACHE",
+          projektId: "proj-VERALTET",
+          statusName: "In Bearbeitung",
+          statusTyp: "progress",
+        }),
+      ],
     });
 
     const ergebnis = await dienst.erledige({
@@ -325,6 +367,11 @@ describe("erstelleErledigenDienst", () => {
 
     const vorgang = store.finde((ergebnis as { ok: true; vorgangId: number }).vorgangId)!;
     expect(vorgang.alterStatusId).toBe(STATUS.offen.id);
+    expect(vorgang.taskName).toBe("Aufgabe task-1");
+    expect(vorgang.projectId).toBe("proj-1");
+    // Auch der done-Status wird für das Projekt aus getTask aufgelöst.
+    expect(awork.getTaskStatuses).toHaveBeenCalledTimes(1);
+    expect(awork.getTaskStatuses).toHaveBeenCalledWith("proj-1");
   });
 
   it("(k) meldet schon_erledigt, wenn awork die Aufgabe beim Vorher-Lesen bereits als done führt", async () => {
@@ -405,6 +452,27 @@ describe("erstelleErledigenDienst", () => {
     });
 
     expect(ergebnis.ok).toBe(true);
+  });
+
+  it("(l3) lässt bei zwei echt gleichzeitigen Klicks nur einen Vorgang entstehen", async () => {
+    const nutzer = neuerNutzer();
+    const { awork } = fakeAwork();
+    const { dienst } = baueDienst({ awork, karten: [karte("task-1", ["aw-lea"])] });
+    const klick = () =>
+      dienst.erledige({ taskId: "task-1", userId: nutzer.id, aworkUserId: "aw-lea", istAdmin: false });
+
+    // Beide Aufrufe starten, bevor der erste seinen Vorgang schreiben kann —
+    // der Blick in die DB allein sähe hier zweimal "kein offener Vorgang"
+    // und liesse später zwei Kommentare für dieselbe Aufgabe entstehen.
+    const ergebnisse = await Promise.all([klick(), klick()]);
+
+    expect(ergebnisse.filter((e) => e.ok)).toHaveLength(1);
+    expect(ergebnisse.filter((e) => !e.ok)).toEqual([{ ok: false, fehler: "laeuft_bereits" }]);
+    expect(awork.changeTaskStatus).toHaveBeenCalledTimes(1);
+    const anzahl = db
+      .prepare("SELECT COUNT(*) AS n FROM teamboard_erledigungen WHERE task_id = ?")
+      .get("task-1") as { n: number };
+    expect(anzahl.n).toBe(1);
   });
 
   it("(m) meldet nicht_erledigbar bei fehlender projectId, fehlender taskStatusId oder fehlendem taskStatus — vor jedem Schreibaufruf", async () => {
@@ -499,6 +567,27 @@ describe("erstelleErledigenDienst", () => {
     });
     expect(awork.changeTaskStatus).not.toHaveBeenCalled();
     expect(store.finde(vorgang.id)!.rueckgaengigAm).toBeNull();
+  });
+
+  it("(h3b) sperrt das Undo schon bei exakt erreichter Fenstergrenze — dort ist der Kommentarlauf bereits zuständig", async () => {
+    const nutzer = neuerNutzer();
+    const { awork } = fakeAwork();
+    const { dienst } = baueDienst({ awork, karten: [] });
+    const vorgang = legeVorgangAn({
+      userId: nutzer.id,
+      jetzt: new Date(Date.now() - UNDO_FENSTER_MS),
+    });
+
+    expect(await dienst.macheRueckgaengig({ vorgangId: vorgang.id, userId: nutzer.id })).toEqual({
+      ok: false,
+      fehler: "fenster_abgelaufen",
+    });
+    // Gegenprobe: derselbe Vorgang ist für den Kommentarlauf bereits fällig.
+    // Beides gleichzeitig zulässig wäre genau die Überlappung, die > statt >=
+    // offen liesse.
+    expect(
+      store.offeneKommentare(UNDO_FENSTER_MS, MAX_KOMMENTAR_FEHLVERSUCHE).map((e) => e.id),
+    ).toContain(vorgang.id);
   });
 
   it("(h4) meldet schon_rueckgaengig beim zweiten Undo-Klick", async () => {

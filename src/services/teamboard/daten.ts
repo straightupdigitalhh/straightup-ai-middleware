@@ -59,6 +59,11 @@ export function erstelleBoardLader(opts: {
   let letzterFehler: unknown = null;
   let laufenderAbruf: Promise<[TeamboardNutzer[], LaufenderTimer[], OffeneAufgabe[]]> | null = null;
   let abrufStartMs = 0;
+  // Generation des gültigen Standes: verwerfen() zählt sie hoch. Jeder Abruf
+  // merkt sich beim Start seine Generation und installiert sein Ergebnis nur,
+  // solange sie noch gilt (s. verwerfen()).
+  let generation = 0;
+  let abrufGeneration = 0;
 
   /**
    * Stale-BoardStand aus dem Cache, Alter in ganzen Sekunden ab geholtUmMs
@@ -104,6 +109,7 @@ export function erstelleBoardLader(opts: {
         // die Ankunftszeit irgendeines Joiners, die je nach Await-Reihenfolge
         // den Cache auf einen späteren, falschen Zeitpunkt datieren würde.
         abrufStartMs = jetztMs;
+        abrufGeneration = generation;
         laufenderAbruf = Promise.all([
           opts.client.getBoardUsers(),
           opts.client.getRunningTimers(),
@@ -141,7 +147,14 @@ export function erstelleBoardLader(opts: {
       jetzt,
       heute: heuteBerlin(jetzt),
     });
-    cache = { board, geholtUmMs: abrufStartMs };
+    // Ein Abruf, der VOR einem verwerfen() gestartet ist, darf seinen
+    // überholten Stand nicht mehr installieren — sonst überschriebe er das
+    // Verwerfen sofort wieder (samt altem geholtUmMs) und der Nutzer sähe
+    // seine gerade erledigte Aufgabe eine volle TTL lang weiter im Board.
+    // Der Aufrufer bekommt sein Ergebnis trotzdem; nur der Cache bleibt leer.
+    if (abrufGeneration === generation) {
+      cache = { board, geholtUmMs: abrufStartMs };
+    }
     return { board, alterSekunden: 0 };
   }
 
@@ -152,12 +165,14 @@ export function erstelleBoardLader(opts: {
      * trotzdem den Stale-Stand (bzw. würfe letzterFehler weiter) und der
      * Nutzer sähe seine gerade erledigte Aufgabe weiter im Board.
      * laufenderAbruf bleibt unangetastet — ein schon fliegender Abruf darf
-     * geteilt werden.
+     * geteilt werden; die hochgezählte Generation sorgt aber dafür, dass sein
+     * (vor dem Statuswechsel geholter) Stand nicht mehr im Cache landet.
      */
     verwerfen(): void {
       cache = null;
       fehlerBisMs = null;
       letzterFehler = null;
+      generation += 1;
     },
   });
 }
