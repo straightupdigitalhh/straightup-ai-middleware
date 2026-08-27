@@ -1,5 +1,5 @@
 import type { BoardStand } from "./daten.js";
-import type { Board, Lane } from "./board.js";
+import type { AufgabenKarte, Board, Lane } from "./board.js";
 
 /**
  * Reine Client-Funktionen (P1): als exportierte TS-Funktionen definiert,
@@ -196,6 +196,28 @@ export function wendeEinstellungenAn(
 }
 
 /**
+ * Die sechs Zeilen des Detail-Panels (Task 7) in fester Reihenfolge:
+ * Zuständig, Projekt, Status, Fällig, Kennung, Priorität. Fehlende, leere
+ * und null-Werte werden zu "—", damit im Panel nie eine leere Zeile oder
+ * gar "undefined" steht. Ruft datumKurz als Geschwister-Funktion auf
+ * derselben Einbettungsebene auf (kein Closure, wie zeitZeile).
+ */
+export function panelFelder(
+  a: AufgabenKarte,
+  laneName: string
+): { label: string; wert: string }[] {
+  var faellig = a.faelligAm ? datumKurz(a.faelligAm) : "";
+  return [
+    { label: "Zuständig", wert: laneName || "—" },
+    { label: "Projekt", wert: a.projektName || "—" },
+    { label: "Status", wert: a.statusName || "—" },
+    { label: "Fällig", wert: faellig || "—" },
+    { label: "Kennung", wert: a.kennung || "—" },
+    { label: "Priorität", wert: a.istPrio ? "ja" : "—" },
+  ];
+}
+
+/**
  * Rendert das komplette HTML-Dokument. Nutzerdaten (Namen, Aufgabentitel)
  * stehen NUR im JSON-Datenblock — dort wird "<" zu <, damit ein
  * "</script>" in einem Aufgabennamen den Block nicht beenden kann. Das
@@ -298,7 +320,7 @@ export function renderSeite(stand: BoardStand): string {
   .zeile { color: var(--gedeckt); font-size: 13px; overflow-wrap: anywhere; }
   .karte {
     border: 1px solid var(--linie); border-radius: 10px; padding: 8px 10px;
-    margin-bottom: 8px;
+    margin-bottom: 8px; cursor: pointer;
   }
   .karte .kopf { display: flex; gap: 6px; align-items: baseline; }
   .karte .name { font-weight: 600; flex: 1; overflow-wrap: anywhere; }
@@ -314,6 +336,27 @@ export function renderSeite(stand: BoardStand): string {
     font: inherit; font-size: 13px; cursor: pointer; padding: 4px; text-align: left;
   }
   .leer { color: var(--gedeckt); font-size: 13px; font-style: italic; }
+  /* Detail-Panel (Task 7): rechts angedockt, volle Höhe, über dem Board.
+     Es fährt über die transform-Klasse .offen ein; ohne sie steht es
+     außerhalb des Sichtfelds. Farben ausschließlich über die vorhandenen
+     Tokens, damit beide Farbschemata ohne Zusatzregel stimmen. */
+  #panel {
+    position: fixed; top: 0; right: 0; width: 380px; height: 100%; z-index: 20;
+    background: var(--karte); border-left: 1px solid var(--linie);
+    padding: 16px 18px; overflow-y: auto;
+    transform: translateX(100%); transition: transform .2s ease-out;
+  }
+  #panel.offen { transform: translateX(0); }
+  .panel-kopf { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+  .panel-titel { margin: 0; font-size: 17px; flex: 1; overflow-wrap: anywhere; }
+  .panel-schliessen {
+    border: 0; background: none; color: var(--gedeckt); font: inherit; font-size: 20px;
+    line-height: 1; cursor: pointer; padding: 0 2px;
+  }
+  .panel-zeile { display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--linie); }
+  .panel-label { color: var(--gedeckt); font-size: 13px; flex: 0 0 90px; }
+  .panel-wert { font-size: 13px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  @media (max-width: 560px) { #panel { width: 100%; border-left: 0; } }
 </style>
 <body>
 <header>
@@ -327,6 +370,7 @@ export function renderSeite(stand: BoardStand): string {
 <div id="zeiten-hinweis"></div>
 <div id="ausgeblendet-liste"></div>
 <div id="lanes"></div>
+<div id="panel" hidden></div>
 <script id="board-daten" type="application/json">${daten}</script>
 <script>
 (function () {
@@ -368,6 +412,12 @@ export function renderSeite(stand: BoardStand): string {
   // Lanes (Basis für die Ausgeblendet-Liste im Chip).
   var letzteSichtbareLanes = [];
   var letzteAusgeblendeteLanes = [];
+  // Detail-Panel (Task 7): welche Aufgabe gerade offen ist — außerhalb von
+  // zeichne(), damit der 30-s-Neuaufbau das Panel nicht vergisst. Die Lane
+  // gehört dazu, weil eine Aufgabe mehrere Zuständige haben kann: ohne sie
+  // spränge die Zeile "Zuständig" beim Neubefüllen auf eine fremde Lane.
+  var offeneAufgabeId = null;
+  var offeneLaneId = null;
 
   function el(tag, klasse, text) {
     var e = document.createElement(tag);
@@ -401,6 +451,11 @@ export function renderSeite(stand: BoardStand): string {
   // Task 10: wendeEinstellungenAn ebenfalls oben als exportierte, testbare
   // TS-Funktion definiert und hier eingebettet.
   ${String(wendeEinstellungenAn)}
+
+  // Task 7: panelFelder ebenfalls oben als exportierte, testbare TS-Funktion
+  // definiert und hier eingebettet — ohne diese Zeile gäbe es die Funktion
+  // im Browser gar nicht.
+  ${String(panelFelder)}
 
   function extraSekunden() {
     // Wie lange der empfangene Stand schon alt ist (Cache-Alter + Zeit seit Empfang).
@@ -509,6 +564,12 @@ export function renderSeite(stand: BoardStand): string {
         if (unten) zeile.appendChild(el("span", null, unten + (a.faelligAm ? " · " : "")));
         if (a.faelligAm) zeile.appendChild(el("span", "faellig" + (a.ueberfaellig ? " rot" : ""), "fällig " + datumKurz(a.faelligAm)));
         if (unten || a.faelligAm) k.appendChild(zeile);
+        // Klick auf die Karte öffnet das Detail-Panel (Task 7) — per
+        // addEventListener wie alles andere hier, nie über ein
+        // onclick-Attribut (CSP: script-src-attr 'none').
+        k.addEventListener("click", function () {
+          oeffnePanel(a.id, lane.userId);
+        });
         liste.appendChild(k);
       });
       if (lane.aufgaben.length > MAX_KARTEN && !aufgeklappt) {
@@ -524,6 +585,9 @@ export function renderSeite(stand: BoardStand): string {
     });
     wurzel.scrollLeft = scrollLeft;
     aktualisiereKopf();
+    // Ein offenes Panel aus den frischen Daten neu befüllen (Task 7) — es
+    // liegt außerhalb von #lanes und überlebt das Leeren oben.
+    fuellePanel();
   }
 
   function aktualisiereKopf() {
@@ -752,6 +816,77 @@ export function renderSeite(stand: BoardStand): string {
     zeichne();
     speichereEinstellungen();
   }
+
+  // ─── Task 7: Detail-Panel ───────────────────────────────────────────────
+
+  function oeffnePanel(aufgabeId, laneId) {
+    offeneAufgabeId = aufgabeId;
+    offeneLaneId = laneId;
+    var panel = document.getElementById("panel");
+    panel.hidden = false;
+    fuellePanel();
+    // Erst im nächsten Frame einfahren lassen: direkt aus display:none
+    // heraus gäbe es keinen Übergang, das Panel stünde schlagartig da.
+    requestAnimationFrame(function () {
+      if (!panel.hidden) panel.classList.add("offen");
+    });
+  }
+
+  function schliessePanel() {
+    offeneAufgabeId = null;
+    offeneLaneId = null;
+    var panel = document.getElementById("panel");
+    panel.classList.remove("offen");
+    panel.hidden = true;
+    panel.textContent = "";
+  }
+
+  /**
+   * Befüllt ein offenes Panel aus dem aktuellen Board-Stand — nach jedem
+   * zeichne() erneut, damit Status und Fälligkeit nach dem 30-s-Nachladen
+   * stimmen. Gesucht wird im rohen Stand, nicht in den gefilterten Lanes:
+   * ein Projekt-Filter soll das Panel nicht schließen. Ist die Aufgabe gar
+   * nicht mehr im Board (erledigt, umverteilt), schließt es sich.
+   */
+  function fuellePanel() {
+    if (offeneAufgabeId === null) return;
+    var gefundeneLane = null;
+    var gefundeneAufgabe = null;
+    stand.board.lanes.forEach(function (l) {
+      if (l.userId !== offeneLaneId) return;
+      l.aufgaben.forEach(function (a) {
+        if (a.id === offeneAufgabeId) { gefundeneLane = l; gefundeneAufgabe = a; }
+      });
+    });
+    if (gefundeneAufgabe === null) {
+      schliessePanel();
+      return;
+    }
+    var panel = document.getElementById("panel");
+    panel.textContent = "";
+    var kopf = el("div", "panel-kopf");
+    kopf.appendChild(el("h2", "panel-titel", gefundeneAufgabe.name));
+    var schliessen = el("button", "panel-schliessen", "×");
+    schliessen.type = "button";
+    schliessen.title = "Schließen";
+    schliessen.addEventListener("click", function () {
+      schliessePanel();
+    });
+    kopf.appendChild(schliessen);
+    panel.appendChild(kopf);
+    panelFelder(gefundeneAufgabe, gefundeneLane.name).forEach(function (f) {
+      var zeile = el("div", "panel-zeile");
+      zeile.appendChild(el("span", "panel-label", f.label));
+      zeile.appendChild(el("span", "panel-wert", f.wert));
+      panel.appendChild(zeile);
+    });
+  }
+
+  // Escape schließt das Panel — ein einziger dokumentweiter Listener,
+  // gesetzt wie alle anderen per addEventListener.
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") schliessePanel();
+  });
 
   // Projekt-Filter-Auswahl: Änderung landet in der Client-Variable, kein
   // Speichern (Spec §6). Der Listener wird nur einmal gesetzt — die

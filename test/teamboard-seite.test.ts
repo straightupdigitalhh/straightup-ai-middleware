@@ -13,6 +13,7 @@ import {
   projekteAusBoard,
   wendeProjektFilterAn,
   wendeEinstellungenAn,
+  panelFelder,
 } from "../src/services/teamboard/seite.js";
 import type { BoardStand } from "../src/services/teamboard/daten.js";
 import type { Board, Lane } from "../src/services/teamboard/board.js";
@@ -319,6 +320,74 @@ describe("renderSeite", () => {
     expect(einstellungenPos).toBeLessThan(filterPos);
     expect(filterPos).toBeLessThan(forEachPos);
   });
+
+  // ── Task 7: Detail-Panel (Slide-in) ───────────────────────────────────
+  // Wie bei Task 9/10: kein jsdom in dieser Suite, daher reine Text-
+  // Tripwires gegen den Quelltext des ausgelieferten Dokuments.
+
+  it("legt den Panel-Container als Geschwister von #lanes an, damit ihn das Leeren von #lanes in zeichne() nicht mitnimmt (Task 7)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain('<div id="lanes"></div>\n<div id="panel" hidden></div>');
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    // Der Neuaufbau leert weiterhin nur #lanes; das Panel liegt außerhalb
+    // dieses Teilbaums und wird nicht in zeichne() selbst angefasst.
+    expect(zeichneBlock).toContain('wurzel.textContent = "";');
+    expect(zeichneBlock).not.toContain('getElementById("panel")');
+  });
+
+  it("hält den Panel-Zustand außerhalb von zeichne() und befüllt ein offenes Panel nach jedem Neuzeichnen aus den frischen Board-Daten (Task 7)", () => {
+    const html = renderSeite(stand());
+    const vorZeichne = html.split("function zeichne()")[0];
+    expect(vorZeichne).toContain("var offeneAufgabeId = null;");
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    expect(zeichneBlock).toContain("fuellePanel();");
+    const fuelleBlock = html.split("function fuellePanel()")[1]?.split("\n  }")[0];
+    // Aus dem frischen Stand, nicht aus einer beim Öffnen gezogenen Kopie —
+    // und Schließen, wenn die Aufgabe dort nicht mehr steht.
+    expect(fuelleBlock).toContain("stand.board.lanes");
+    expect(fuelleBlock).toContain("schliessePanel();");
+    expect(fuelleBlock).toContain("panelFelder(");
+  });
+
+  it("bindet den Klick auf die Aufgabenkarte per addEventListener, noch bevor die Karte angehängt wird (Task 7)", () => {
+    const html = renderSeite(stand());
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    const klickPos = zeichneBlock!.indexOf('k.addEventListener("click"');
+    const anhaengenPos = zeichneBlock!.indexOf("liste.appendChild(k)");
+    expect(klickPos).toBeGreaterThan(-1);
+    expect(anhaengenPos).toBeGreaterThan(-1);
+    expect(klickPos).toBeLessThan(anhaengenPos);
+    expect(zeichneBlock).toContain("oeffnePanel(a.id, lane.userId)");
+    // CSP (script-src-attr 'none'): weiterhin keine Inline-Handler-Attribute.
+    expect(html).not.toMatch(/\son\w+\s*=/);
+  });
+
+  it("schließt das Panel per Knopf und per Escape (Task 7)", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain('el("button", "panel-schliessen", "×")');
+    expect(html).toContain("function schliessePanel()");
+    const escapeBlock = html.split('document.addEventListener("keydown"')[1]?.split("});")[0];
+    expect(escapeBlock).toContain('ev.key === "Escape"');
+    expect(escapeBlock).toContain("schliessePanel();");
+  });
+
+  it("dockt das Panel rechts über die volle Höhe an, über dem Board, mit Übergang beim Einfahren und voller Breite auf schmalen Schirmen — Farben nur über die vorhandenen Tokens (Task 7)", () => {
+    const html = renderSeite(stand());
+    const panelCss = html.split("#panel {")[1]?.split("}")[0];
+    expect(panelCss).toContain("position: fixed");
+    expect(panelCss).toContain("right: 0");
+    expect(panelCss).toContain("height: 100%");
+    expect(panelCss).toContain("z-index:");
+    expect(panelCss).toContain("transition: transform");
+    expect(panelCss).toContain("background: var(--karte)");
+    expect(panelCss).toContain("border-left: 1px solid var(--linie)");
+    // Eingefahrener Zustand als eigene Klasse — sonst gäbe es keinen Übergang.
+    expect(html).toContain("#panel.offen {");
+    // Auf schmalen Schirmen volle Breite.
+    expect(html).toContain("@media (max-width: 560px) { #panel { width: 100%;");
+    // Keine neu erfundenen Farbwerte im Panel-CSS, nur Tokens.
+    expect(panelCss).not.toMatch(/#[0-9a-fA-F]{3,6}\b/);
+  });
 });
 
 describe("uhrText (P1 — reine Funktion, die auch im Client-Skript läuft)", () => {
@@ -414,6 +483,8 @@ function aufgabeKarte(teile: Partial<Lane["aufgaben"][number]>): Lane["aufgaben"
     statusTyp: "todo",
     faelligAm: null,
     istPrio: false,
+    istWiederkehrend: false,
+    assigneeIds: [],
     ueberfaellig: false,
     ...teile,
   };
@@ -583,6 +654,63 @@ describe("wendeEinstellungenAn (P1 — Reihenfolge/Ausblenden der Lanes, Task 10
   });
 });
 
+describe("panelFelder (P1 — die sechs Zeilen des Detail-Panels, Task 7)", () => {
+  it("liefert die sechs Zeilen in fester Reihenfolge mit allen Werten", () => {
+    const felder = panelFelder(
+      aufgabeKarte({
+        id: "a-1",
+        name: "YOOtheme aktualisieren",
+        kennung: "STRI-37",
+        projektName: "straightup Intern",
+        statusName: "In Bearbeitung",
+        statusTyp: "progress",
+        faelligAm: "2026-08-26T00:00:00.000Z",
+        istPrio: true,
+      }),
+      "Lea Stöber"
+    );
+    expect(felder).toEqual([
+      { label: "Zuständig", wert: "Lea Stöber" },
+      { label: "Projekt", wert: "straightup Intern" },
+      { label: "Status", wert: "In Bearbeitung" },
+      { label: "Fällig", wert: "26.08." },
+      { label: "Kennung", wert: "STRI-37" },
+      { label: "Priorität", wert: "ja" },
+    ]);
+  });
+
+  it("ersetzt leere und null-Werte durch '—' und liefert nirgends undefined", () => {
+    const felder = panelFelder(
+      aufgabeKarte({
+        kennung: null,
+        projektName: null,
+        statusName: "",
+        faelligAm: null,
+        istPrio: false,
+      }),
+      ""
+    );
+    expect(felder.map((f) => f.label)).toEqual([
+      "Zuständig",
+      "Projekt",
+      "Status",
+      "Fällig",
+      "Kennung",
+      "Priorität",
+    ]);
+    expect(felder.map((f) => f.wert)).toEqual(["—", "—", "—", "—", "—", "—"]);
+    felder.forEach((f) => {
+      expect(f.wert).toBeTypeOf("string");
+      expect(f.wert.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("fällt bei unlesbarem Fälligkeitsdatum auf '—' zurück statt auf den Leerstring aus datumKurz", () => {
+    const felder = panelFelder(aufgabeKarte({ faelligAm: "kein-datum" }), "Lea Stöber");
+    expect(felder[3]).toEqual({ label: "Fällig", wert: "—" });
+  });
+});
+
 describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
   it("enthält die Funktionsquelltexte von uhrText, datumKurz, bannerText und initialen (Einbettung nicht verloren)", () => {
     const html = renderSeite(stand());
@@ -616,6 +744,14 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
     expect(html).toContain("function wendeEinstellungenAn(");
     expect(html).not.toContain("__name(");
     expect(html.split("</script>").length - 1).toBe(2);
+  });
+
+  it("enthält auch panelFelder (Task 7) — ohne die Einbettung gäbe es die Funktion im Browser gar nicht, weiterhin ohne __name(, ohne dritten Script-Block und ohne innerHTML", () => {
+    const html = renderSeite(stand());
+    expect(html).toContain("function panelFelder(");
+    expect(html).not.toContain("__name(");
+    expect(html.split("</script>").length - 1).toBe(2);
+    expect(html).not.toMatch(/\.innerHTML\s*=/);
   });
 });
 
