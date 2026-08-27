@@ -385,8 +385,21 @@ describe("renderSeite", () => {
     expect(html).toContain('el("button", "panel-schliessen", "×")');
     expect(html).toContain("function schliessePanel()");
     const escapeBlock = html.split('document.addEventListener("keydown"')[1]?.split("});")[0];
-    expect(escapeBlock).toContain('ev.key === "Escape"');
+    expect(escapeBlock).toContain('ev.key !== "Escape"');
     expect(escapeBlock).toContain("schliessePanel();");
+  });
+
+  it("lässt Escape wirkungslos, solange ein Undo-Fenster läuft — der Schließen-Knopf schließt weiterhin (M3)", () => {
+    const html = renderSeite(stand(), null);
+    const escapeBlock = html.split('document.addEventListener("keydown"')[1]?.split("});")[0];
+    // Genau die Bedingung aus dem Befund: laufender Vorgang mit klickbarem
+    // Rückgängig-Knopf.
+    expect(escapeBlock).toContain("erledigt !== null && erledigt.vorgangId !== null");
+    // Der Schließen-Knopf im Panel-Kopf ruft weiterhin ungebremst
+    // schliessePanel() — nur der Reflex-Tastendruck nicht.
+    const kopfBlock = html.split('el("button", "panel-schliessen", "×")')[1]?.split("panel.appendChild(kopf)")[0];
+    expect(kopfBlock).toContain("schliessePanel();");
+    expect(kopfBlock).not.toContain("erledigt.vorgangId");
   });
 
   it("dockt das Panel rechts über die volle Höhe an, über dem Board, mit Übergang beim Einfahren und voller Breite auf schmalen Schirmen — Farben nur über die vorhandenen Tokens (Task 7)", () => {

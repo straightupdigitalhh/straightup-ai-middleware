@@ -1138,9 +1138,16 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
   }
 
   // Escape schließt das Panel — ein einziger dokumentweiter Listener,
-  // gesetzt wie alle anderen per addEventListener.
+  // gesetzt wie alle anderen per addEventListener. Solange ein Undo-Fenster
+  // läuft, bleibt Escape aber wirkungslos: es ist der reflexhafteste
+  // Tastendruck überhaupt, und schliessePanel() ruft beendeUndo() — ein
+  // Fehlgriff kostete also unwiderruflich das Rückgängigmachen, während der
+  // Zurechnungskommentar in awork trotzdem entstünde. Der Schließen-Knopf
+  // schließt weiterhin: das ist eine bewusste Entscheidung des Nutzers.
   document.addEventListener("keydown", function (ev) {
-    if (ev.key === "Escape") schliessePanel();
+    if (ev.key !== "Escape") return;
+    if (erledigt !== null && erledigt.vorgangId !== null) return;
+    schliessePanel();
   });
 
   // Projekt-Filter-Auswahl: Änderung landet in der Client-Variable, kein
