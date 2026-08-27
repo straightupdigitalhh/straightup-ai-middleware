@@ -1,9 +1,10 @@
 import { Router, Request, Response, RequestHandler } from 'express';
-import { getAuth, requireAdmin } from '../services/auth.js';
+import { getAuth, requireAdmin, type AuthContext } from '../services/auth.js';
 import { clientErrorMessage } from '../services/errors.js';
 import type { BoardLader, BoardStand } from '../services/teamboard/daten.js';
 import type { ZeitenProNutzer } from '../services/teamboard/zeiten.js';
 import type { ErledigenFehler, RueckgaengigFehler } from '../services/teamboard/erledigen.js';
+import type { Betrachter } from '../services/teamboard/seite.js';
 import type { TeamboardEinstellungen, TeamboardEinstellungenStore } from '../core/teamboard-einstellungen.js';
 import { UNDO_FENSTER_MS } from '../core/teamboard-erledigungen.js';
 
@@ -85,6 +86,19 @@ function parseEinstellungen(body: unknown): TeamboardEinstellungen | null {
   if (b.reihenfolge !== null && !istGueltigeIdListe(b.reihenfolge)) return null;
   if (!istGueltigeIdListe(b.ausgeblendet)) return null;
   return { reihenfolge: b.reihenfolge as string[] | null, ausgeblendet: b.ausgeblendet as string[] };
+}
+
+// ─── Betrachter ───────────────────────────────────────────────────
+//
+// BoardStand ist der für alle Betrachter identische Cache-Inhalt und trägt
+// deshalb keine Nutzeridentität. Wer gerade zusieht, hängt die Route
+// nutzerabhängig an — nach dem Muster von /zeiten. Der Master-Key
+// (via 'api-key') hat keine Identität: dort bleibt es bei null, der Client
+// zeigt dann keinen Erledigt-Knopf.
+
+function betrachterAus(auth: AuthContext | undefined): Betrachter | null {
+  if (!auth || auth.via !== 'session' || !auth.user) return null;
+  return { aworkUserId: auth.user.aworkUserId, istAdmin: auth.role === 'admin' };
 }
 
 /**
@@ -181,7 +195,7 @@ export function createTeamboardRouter(deps: Deps): Router {
   router.get('/api/teamboard/board', async (_req: Request, res: Response) => {
     try {
       const stand = await deps.ladeBoard();
-      res.json(stand);
+      res.json({ ...stand, betrachter: betrachterAus(getAuth(res)) });
     } catch (e: any) {
       console.error(`❌ teamboard: Board laden fehlgeschlagen: ${e?.message ?? e}`);
       res.status(502).json({ error: 'awork_unreachable', message: clientErrorMessage(e) });
@@ -377,7 +391,7 @@ export function createTeamboardRouter(deps: Deps): Router {
 
 interface PageDeps {
   ladeBoard: BoardLader;
-  renderSeite: (stand: BoardStand) => string;
+  renderSeite: (stand: BoardStand, betrachter: Betrachter | null) => string;
   pageAuth: RequestHandler;
 }
 
@@ -404,7 +418,7 @@ export function createTeamboardPageRouter(deps: PageDeps): Router {
       // renderSeite aufrufen, bevor Headers geschrieben werden, damit ein
       // Fehler dort noch abgefangen werden kann, ohne dass eine teilweise
       // geschriebene Response vorliegt.
-      const html = deps.renderSeite(stand);
+      const html = deps.renderSeite(stand, betrachterAus(getAuth(res)));
       res.set('Cache-Control', 'no-store').status(200).type('text/html; charset=utf-8').send(html);
     } catch (fehler) {
       // Fehler bei renderSeite oder sonst etwas im Handler — nie das

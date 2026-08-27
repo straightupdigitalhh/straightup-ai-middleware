@@ -95,18 +95,35 @@ function memberAuth(aworkUserId: string | null): AuthContext {
 // ─── (a) GET /board ────────────────────────────────────────────────
 
 describe('GET /api/teamboard/board', () => {
-  it('via api-key ⇒ 200 + BoardStand-JSON', async () => {
+  it('via api-key ⇒ 200 + BoardStand-JSON, betrachter null (keine Nutzeridentität)', async () => {
     const deps = makeDeps();
     const res = await request(makeApp(deps, apiKeyAuth)).get('/api/teamboard/board');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(boardStandFixture);
+    expect(res.body).toEqual({ ...boardStandFixture, betrachter: null });
   });
 
-  it('via session ⇒ 200 + BoardStand-JSON', async () => {
+  it('via session ⇒ 200 + BoardStand-JSON samt Betrachter', async () => {
     const deps = makeDeps();
     const res = await request(makeApp(deps, adminSession)).get('/api/teamboard/board');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(boardStandFixture);
+    expect(res.body).toEqual({ ...boardStandFixture, betrachter: { aworkUserId: null, istAdmin: true } });
+  });
+
+  // Der Board-Cache ist für alle Betrachter derselbe (BoardStand trägt keine
+  // Identität) — wer zusieht, hängt die Route nutzerabhängig an, wie /zeiten.
+  it('Member mit awork-Mapping ⇒ eigene awork-ID, istAdmin false', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea'))).get('/api/teamboard/board');
+    expect(res.status).toBe(200);
+    expect(res.body.betrachter).toEqual({ aworkUserId: 'u-lea', istAdmin: false });
+    expect(res.body.board).toEqual(boardStandFixture.board);
+  });
+
+  it('Member ohne awork-Mapping ⇒ aworkUserId null (der Client zeigt dann keinen Erledigt-Knopf)', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth(null))).get('/api/teamboard/board');
+    expect(res.status).toBe(200);
+    expect(res.body.betrachter).toEqual({ aworkUserId: null, istAdmin: false });
   });
 
   it('werfender ladeBoard ⇒ 502 mit clientErrorMessage-Body, kein Stacktrace', async () => {
@@ -356,6 +373,30 @@ describe('Muster A: echter Session-Login trägt awork_user_id bis res.locals.aut
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ zeiten: { 'u-lea': zeitenFixture['u-lea'] }, hinweis: null });
     expect(Object.keys(res.body.zeiten)).toEqual(['u-lea']);
+  });
+});
+
+describe('Muster A: /board hängt den Betrachter je Session an, der Board-Stand bleibt für alle gleich', () => {
+  it('zwei verschiedene Sessions ⇒ zwei verschiedene betrachter, via api-key ⇒ null', async () => {
+    const { app, admin, member } = makeRealApp();
+    const memberCookie = await loginCookie(app, member.email, 'member-pass-123');
+    const adminCookie = await loginCookie(app, admin.email, 'admin-pass-123');
+
+    const alsMember = await request(app).get('/api/teamboard/board').set('Cookie', memberCookie);
+    expect(alsMember.status).toBe(200);
+    expect(alsMember.body.betrachter).toEqual({ aworkUserId: 'u-lea', istAdmin: false });
+
+    const alsAdmin = await request(app).get('/api/teamboard/board').set('Cookie', adminCookie);
+    expect(alsAdmin.status).toBe(200);
+    expect(alsAdmin.body.betrachter).toEqual({ aworkUserId: null, istAdmin: true });
+
+    const perKey = await request(app).get('/api/teamboard/board').set('X-API-Key', MASTER_KEY);
+    expect(perKey.status).toBe(200);
+    expect(perKey.body.betrachter).toBeNull();
+
+    // Derselbe Cache-Inhalt für alle drei — nur der Betrachter unterscheidet sich.
+    expect(alsMember.body.board).toEqual(alsAdmin.body.board);
+    expect(alsMember.body.board).toEqual(perKey.body.board);
   });
 });
 

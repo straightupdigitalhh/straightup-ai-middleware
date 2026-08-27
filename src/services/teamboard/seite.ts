@@ -218,14 +218,47 @@ export function panelFelder(
 }
 
 /**
+ * Wer den Erledigt-Knopf im Panel sieht (Task 8). Die Reihenfolge der drei
+ * Zweige ist nicht beliebig:
+ *  1. Ohne eigene awork-ID ⇒ false, AUCH für Admins: der Server braucht die
+ *     ID für den Zurechnungskommentar, /erledigen antwortet ohne sie
+ *     garantiert mit 403 — ein Knopf dort wäre ein toter Knopf.
+ *  2. Admin ⇒ true, auch auf fremden Aufgaben.
+ *  3. Sonst nur, wenn die eigene awork-ID unter den Zuständigen steht.
+ * Wie die übrigen P1-Funktionen ohne Closure und nur mit browser-sicheren
+ * APIs — sie wird unten per String(...) ins Client-Skript eingebettet.
+ */
+export function darfErledigen(
+  a: { assigneeIds: string[] },
+  eigeneAworkId: string | null,
+  istAdmin: boolean
+): boolean {
+  if (!eigeneAworkId) return false;
+  if (istAdmin) return true;
+  return a.assigneeIds.indexOf(eigeneAworkId) !== -1;
+}
+
+/**
+ * Wer gerade zusieht (Task 8). Steht bewusst NICHT im BoardStand: der
+ * Board-Cache ist für alle Betrachter derselbe und darf keine Identität
+ * tragen. Die Route hängt den Betrachter nutzerabhängig an — an die
+ * /board-Antwort wie an die gerenderte Seite. null bei via === 'api-key'
+ * (der Master-Key hat keine Nutzeridentität).
+ */
+export interface Betrachter {
+  aworkUserId: string | null;
+  istAdmin: boolean;
+}
+
+/**
  * Rendert das komplette HTML-Dokument. Nutzerdaten (Namen, Aufgabentitel)
  * stehen NUR im JSON-Datenblock — dort wird "<" zu <, damit ein
  * "</script>" in einem Aufgabennamen den Block nicht beenden kann. Das
  * Client-Skript baut alles mit createElement/textContent auf; es gibt
  * keinen Pfad, auf dem Daten als HTML interpretiert werden.
  */
-export function renderSeite(stand: BoardStand): string {
-  const daten = JSON.stringify(stand).replace(/</g, "\\u003c");
+export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): string {
+  const daten = JSON.stringify({ ...stand, betrachter }).replace(/</g, "\\u003c");
   return `<!doctype html>
 <html lang="de">
 <meta charset="utf-8">
@@ -356,6 +389,17 @@ export function renderSeite(stand: BoardStand): string {
   .panel-zeile { display: flex; gap: 10px; padding: 6px 0; border-top: 1px solid var(--linie); }
   .panel-label { color: var(--gedeckt); font-size: 13px; flex: 0 0 90px; }
   .panel-wert { font-size: 13px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  /* Aktionsbereich des Panels (Task 8): Erledigt-Knopf, Undo-Countdown,
+     Hinweis- und Fehlertext. Wieder nur die vorhandenen Farb-Tokens. */
+  .panel-aktion { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--linie); }
+  .erledigt-btn {
+    width: 100%; font: inherit; font-weight: 600; cursor: pointer;
+    padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--aktiv); background: var(--aktiv-grund); color: var(--aktiv);
+  }
+  .panel-erledigt { font-size: 13px; margin-bottom: 6px; }
+  .panel-hinweis { color: var(--gedeckt); font-size: 12px; }
+  .panel-fehler { color: var(--warn); font-size: 13px; margin-bottom: 8px; }
   @media (max-width: 560px) { #panel { width: 100%; border-left: 0; } }
 </style>
 <body>
@@ -418,6 +462,17 @@ export function renderSeite(stand: BoardStand): string {
   // spränge die Zeile "Zuständig" beim Neubefüllen auf eine fremde Lane.
   var offeneAufgabeId = null;
   var offeneLaneId = null;
+  // Laufender Erledigen-Vorgang mit offenem Undo-Fenster (Task 8) — ebenfalls
+  // außerhalb von zeichne(). null = kein Vorgang, sonst
+  // { aufgabeId, aufgabe, laneName, vorgangId, restSekunden }. Die Kopie der
+  // Aufgabe gehört dazu: der Erledigen-Dienst verwirft den Board-Cache, das
+  // nächste Nachladen kennt sie nicht mehr — ohne die Kopie zöge sich das
+  // Panel noch im Undo-Fenster unter dem Rückgängig-Knopf weg.
+  var erledigt = null;
+  var undoTicker = null;
+  // Text der letzten Fehlerantwort — IMMER die message aus der Serverantwort,
+  // nie ein im Client erfundener Text.
+  var panelFehlerText = null;
 
   function el(tag, klasse, text) {
     var e = document.createElement(tag);
@@ -456,6 +511,11 @@ export function renderSeite(stand: BoardStand): string {
   // definiert und hier eingebettet — ohne diese Zeile gäbe es die Funktion
   // im Browser gar nicht.
   ${String(panelFelder)}
+
+  // Task 8: darfErledigen ebenfalls oben als exportierte, testbare TS-Funktion
+  // definiert und hier eingebettet — ohne diese Zeile gäbe es die Funktion im
+  // Browser gar nicht.
+  ${String(darfErledigen)}
 
   function extraSekunden() {
     // Wie lange der empfangene Stand schon alt ist (Cache-Alter + Zeit seit Empfang).
@@ -822,6 +882,9 @@ export function renderSeite(stand: BoardStand): string {
   function oeffnePanel(aufgabeId, laneId) {
     offeneAufgabeId = aufgabeId;
     offeneLaneId = laneId;
+    // Ein Fehlertext gehört zur zuvor gezeigten Aufgabe — nicht mit ins
+    // frisch geöffnete Panel schleppen.
+    panelFehlerText = null;
     var panel = document.getElementById("panel");
     panel.hidden = false;
     fuellePanel();
@@ -835,6 +898,7 @@ export function renderSeite(stand: BoardStand): string {
   function schliessePanel() {
     offeneAufgabeId = null;
     offeneLaneId = null;
+    panelFehlerText = null;
     var panel = document.getElementById("panel");
     panel.classList.remove("offen");
     panel.hidden = true;
@@ -858,9 +922,19 @@ export function renderSeite(stand: BoardStand): string {
         if (a.id === offeneAufgabeId) { gefundeneLane = l; gefundeneAufgabe = a; }
       });
     });
+    var laneName = gefundeneLane === null ? "" : gefundeneLane.name;
     if (gefundeneAufgabe === null) {
-      schliessePanel();
-      return;
+      // Gerade erledigt: das nachgeladene Board kennt die Aufgabe nicht mehr
+      // (der Dienst verwirft den Cache). Solange der Vorgang zu genau dieser
+      // Aufgabe läuft, bleibt das Panel mit der Kopie stehen — sonst
+      // verschwände der Rückgängig-Knopf noch im Undo-Fenster.
+      if (erledigt !== null && erledigt.aufgabeId === offeneAufgabeId) {
+        gefundeneAufgabe = erledigt.aufgabe;
+        laneName = erledigt.laneName;
+      } else {
+        schliessePanel();
+        return;
+      }
     }
     var panel = document.getElementById("panel");
     panel.textContent = "";
@@ -874,12 +948,163 @@ export function renderSeite(stand: BoardStand): string {
     });
     kopf.appendChild(schliessen);
     panel.appendChild(kopf);
-    panelFelder(gefundeneAufgabe, gefundeneLane.name).forEach(function (f) {
+    panelFelder(gefundeneAufgabe, laneName).forEach(function (f) {
       var zeile = el("div", "panel-zeile");
       zeile.appendChild(el("span", "panel-label", f.label));
       zeile.appendChild(el("span", "panel-wert", f.wert));
       panel.appendChild(zeile);
     });
+    panel.appendChild(baueErledigenBereich(gefundeneAufgabe, laneName));
+  }
+
+  // ─── Task 8: Erledigen mit Undo-Fenster ─────────────────────────────────
+
+  /**
+   * Der Aktionsbereich unten im Panel: erst der Fehlertext des letzten
+   * Versuchs (immer der Text aus der Serverantwort), dann entweder der
+   * laufende Undo-Countdown, der Erledigt-Knopf oder der Hinweis, warum es
+   * hier keinen Knopf gibt.
+   */
+  function baueErledigenBereich(aufgabe, laneName) {
+    var bereich = el("div", "panel-aktion");
+    if (panelFehlerText) {
+      bereich.appendChild(el("div", "panel-fehler", panelFehlerText));
+    }
+    if (erledigt !== null && erledigt.aufgabeId === aufgabe.id && erledigt.vorgangId !== null) {
+      bereich.appendChild(el("div", "panel-erledigt", "Als erledigt gemeldet."));
+      // Die Restdauer stammt ausschließlich aus der Serverantwort
+      // (undoSekunden) — im Client steht keine Fensterlänge.
+      var zurueck = el("button", "erledigt-btn", "Rückgängig (" + erledigt.restSekunden + " s)");
+      zurueck.type = "button";
+      zurueck.addEventListener("click", function () {
+        macheRueckgaengig();
+      });
+      bereich.appendChild(zurueck);
+      return bereich;
+    }
+    // Der Betrachter hängt an den Board-Daten (Route, nicht Cache); via
+    // api-key gibt es keinen — dann bleibt es beim Hinweis.
+    var betrachter = stand.betrachter || null;
+    var eigeneAworkId = betrachter ? betrachter.aworkUserId : null;
+    var istAdmin = betrachter ? betrachter.istAdmin : false;
+    if (darfErledigen(aufgabe, eigeneAworkId, istAdmin)) {
+      var knopf = el("button", "erledigt-btn", "Erledigt");
+      knopf.type = "button";
+      knopf.addEventListener("click", function () {
+        erledige(aufgabe, laneName);
+      });
+      bereich.appendChild(knopf);
+      return bereich;
+    }
+    bereich.appendChild(el("div", "panel-hinweis", eigeneAworkId
+      ? "Nur Zuständige können diese Aufgabe erledigen."
+      : "Erledigen geht nur mit hinterlegtem awork-Mapping — ein Admin kann es in der Nutzerverwaltung verknüpfen."));
+    return bereich;
+  }
+
+  function beendeUndo() {
+    if (undoTicker !== null) {
+      clearInterval(undoTicker);
+      undoTicker = null;
+    }
+    erledigt = null;
+  }
+
+  function tickeUndo() {
+    if (erledigt === null) return;
+    erledigt.restSekunden = erledigt.restSekunden - 1;
+    if (erledigt.restSekunden > 0) {
+      fuellePanel();
+      return;
+    }
+    // Fenster abgelaufen: zurück in den normalen Zustand. Das frische Board
+    // kennt die Aufgabe nicht mehr, das Panel schließt sich in fuellePanel.
+    beendeUndo();
+    fuellePanel();
+    nachladen();
+  }
+
+  function erledige(aufgabe, laneName) {
+    panelFehlerText = null;
+    fetch("/api/teamboard/erledigen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ taskId: aufgabe.id }),
+    })
+      .then(function (res) {
+        if (res.status === 401) {
+          // Gleiche Behandlung wie beim Board-Fetch (nachladen): Session
+          // abgelaufen — der Reload landet über den Guard auf dem Login.
+          location.reload();
+          return null;
+        }
+        return res.json().then(function (koerper) {
+          return { ok: res.ok, koerper: koerper };
+        });
+      })
+      .then(function (antwort) {
+        if (!antwort) return;
+        if (!antwort.ok) {
+          panelFehlerText = antwort.koerper.message;
+          fuellePanel();
+          return;
+        }
+        erledigt = {
+          aufgabeId: aufgabe.id,
+          aufgabe: aufgabe,
+          laneName: laneName,
+          vorgangId: antwort.koerper.vorgangId,
+          restSekunden: antwort.koerper.undoSekunden,
+        };
+        if (undoTicker !== null) clearInterval(undoTicker);
+        undoTicker = setInterval(tickeUndo, 1000);
+        fuellePanel();
+      })
+      .catch(function (fehler) {
+        console.warn("teamboard: Erledigen fehlgeschlagen", fehler);
+      });
+  }
+
+  function macheRueckgaengig() {
+    if (erledigt === null || erledigt.vorgangId === null) return;
+    panelFehlerText = null;
+    fetch("/api/teamboard/rueckgaengig", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vorgangId: erledigt.vorgangId }),
+    })
+      .then(function (res) {
+        if (res.status === 401) {
+          location.reload();
+          return null;
+        }
+        return res.json().then(function (koerper) {
+          return { ok: res.ok, koerper: koerper };
+        });
+      })
+      .then(function (antwort) {
+        if (!antwort) return;
+        if (!antwort.ok) {
+          // Servertext zeigen und den Countdown beenden: die Aufgabe bleibt
+          // erledigt, ein zweiter Versuch scheiterte genauso. Die Kopie
+          // bleibt stehen, damit der Text im Panel sichtbar bleibt.
+          panelFehlerText = antwort.koerper.message;
+          if (undoTicker !== null) {
+            clearInterval(undoTicker);
+            undoTicker = null;
+          }
+          erledigt.vorgangId = null;
+          fuellePanel();
+          return;
+        }
+        // Die Aufgabe steht wieder offen — frisches Board holen, dessen
+        // zeichne() das Panel aus den echten Daten neu befüllt.
+        beendeUndo();
+        nachladen();
+      })
+      .catch(function (fehler) {
+        console.warn("teamboard: Rückgängig fehlgeschlagen", fehler);
+      });
   }
 
   // Escape schließt das Panel — ein einziger dokumentweiter Listener,
