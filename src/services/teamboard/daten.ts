@@ -43,12 +43,16 @@ export function heuteBerlin(jetzt: Date): string {
  * Fehler-Backoff auslösen — sonst sähe ein Programmierfehler für immer wie
  * "awork nicht erreichbar" aus, ohne dass ein Log-Eintrag den echten Grund
  * verrät.
+ *
+ * verwerfen() wirft den Cache weg, damit der nächste Aufruf garantiert frisch
+ * lädt — nach einem Schreibvorgang (Erledigen/Undo) muss der Nutzer die
+ * Wirkung seines eigenen Klicks sofort sehen.
  */
 export function erstelleBoardLader(opts: {
   client: Pick<AworkClient, "getBoardUsers" | "getRunningTimers" | "getAvailableTasks">;
   ttlMs: number;
   jetztFn?: () => Date;
-}): BoardLader {
+}): BoardLader & { verwerfen(): void } {
   const jetztFn = opts.jetztFn ?? (() => new Date());
   let cache: { board: Board; geholtUmMs: number } | null = null;
   let fehlerBisMs: number | null = null;
@@ -67,7 +71,7 @@ export function erstelleBoardLader(opts: {
     };
   }
 
-  return async function ladeBoard(): Promise<BoardStand> {
+  async function ladeBoard(): Promise<BoardStand> {
     const jetzt = jetztFn();
     const jetztMs = jetzt.getTime();
     if (cache) {
@@ -139,5 +143,21 @@ export function erstelleBoardLader(opts: {
     });
     cache = { board, geholtUmMs: abrufStartMs };
     return { board, alterSekunden: 0 };
-  };
+  }
+
+  return Object.assign(ladeBoard, {
+    /**
+     * Alle drei Sperren fallen lassen, nicht nur den Cache: steht das
+     * Fehler-Backoff-Fenster offen, lieferte der nächste ladeBoard() sonst
+     * trotzdem den Stale-Stand (bzw. würfe letzterFehler weiter) und der
+     * Nutzer sähe seine gerade erledigte Aufgabe weiter im Board.
+     * laufenderAbruf bleibt unangetastet — ein schon fliegender Abruf darf
+     * geteilt werden.
+     */
+    verwerfen(): void {
+      cache = null;
+      fehlerBisMs = null;
+      letzterFehler = null;
+    },
+  });
 }
