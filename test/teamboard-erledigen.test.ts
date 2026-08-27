@@ -823,6 +823,39 @@ describe("erstelleErledigenDienst", () => {
     expect(nachher.kommentarAm).toBeNull();
   });
 
+  it("(i4) zählt keinen Kommentar-Fehlversuch, wenn nur das Markieren in der DB scheitert — und schreibt im nächsten Lauf keinen zweiten Kommentar (M2)", async () => {
+    const nutzer = neuerNutzer();
+    const { awork } = fakeAwork();
+    const { dienst } = baueDienst({ awork, karten: [] });
+    const vorgang = legeVorgangAn({
+      userId: nutzer.id,
+      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - KOMMENTAR_KARENZ_MS - 1_000),
+    });
+    // Der awork-Kommentar steht, erst der DB-Schreibvorgang danach scheitert.
+    const markieren = vi.spyOn(store, "markiereKommentiert").mockImplementationOnce(() => {
+      throw new Error("SQLITE_BUSY: database is locked");
+    });
+    const stillerLog = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const ersterLauf = await dienst.schreibeFaelligeKommentare();
+
+    expect(awork.createTaskComment).toHaveBeenCalledTimes(1);
+    // Ein gescheitertes Markieren ist KEIN gescheiterter Kommentarversuch —
+    // sonst wäre der Vorgang nach fünf Läufen endgültig gescheitert.
+    expect(store.finde(vorgang.id)!.fehlversuche).toBe(0);
+    expect(ersterLauf).toEqual({ geschrieben: 0, fehlgeschlagen: 1 });
+
+    // Nächster Minutenlauf: nur die Markierung wird nachgeholt.
+    const zweiterLauf = await dienst.schreibeFaelligeKommentare();
+    stillerLog.mockRestore();
+    markieren.mockRestore();
+
+    expect(awork.createTaskComment).toHaveBeenCalledTimes(1); // kein zweiter Kommentar
+    expect(zweiterLauf).toEqual({ geschrieben: 1, fehlgeschlagen: 0 });
+    expect(store.finde(vorgang.id)!.kommentarAm).not.toBeNull();
+    expect(store.finde(vorgang.id)!.fehlversuche).toBe(0);
+  });
+
   it("(i3) überspringt Vorgänge, die die Fehlversuchsgrenze erreicht haben", async () => {
     const nutzer = neuerNutzer();
     const { awork } = fakeAwork();

@@ -100,6 +100,15 @@ export function erstelleErledigenDienst(opts: {
    */
   const laufendeAufgaben = new Set<string>();
 
+  /**
+   * Vorgänge, deren Zurechnungskommentar nachweislich in awork steht, deren
+   * Markierung in der DB aber fehlschlug. Für sie holt der nächste Lauf NUR
+   * die Markierung nach — ohne sie liefe der Vorgang unverändert wieder in
+   * den Kommentar-Zweig und awork bekäme denselben Kommentar ein zweites
+   * (und bis zur Fehlversuchsgrenze fünftes) Mal.
+   */
+  const unmarkiertGeschrieben = new Set<number>();
+
   async function loeseDoneStatus(projectId: string): Promise<string | null> {
     const gemerkt = doneStatusCache.get(projectId);
     if (gemerkt) return gemerkt;
@@ -276,17 +285,38 @@ export function erstelleErledigenDienst(opts: {
     let geschrieben = 0;
     let fehlgeschlagen = 0;
     for (const vorgang of faellige) {
+      // Die beiden Fehlerquellen sind getrennt: der awork-Kommentar und das
+      // Festhalten in der DB. Ein Fehlschlag NACH gesetztem Kommentar darf
+      // keinen zweiten Kommentarversuch nach sich ziehen — sonst schriebe
+      // der nächste Minutenlauf denselben Kommentar erneut.
+      if (!unmarkiertGeschrieben.has(vorgang.id)) {
+        try {
+          await opts.awork.createTaskComment(vorgang.taskId, KOMMENTAR_TEXT, vorgang.aworkUserId);
+        } catch (fehler) {
+          // Der Vorgang bleibt stehen und wird beim nächsten Lauf erneut
+          // versucht — bis zur Fehlversuchsgrenze.
+          opts.store.zaehleFehlversuch(vorgang.id);
+          fehlgeschlagen += 1;
+          console.error(
+            `teamboard: Kommentar für Erledigung ${vorgang.id} (Aufgabe ${vorgang.taskId}) fehlgeschlagen —`,
+            fehler instanceof Error ? fehler.message : String(fehler),
+          );
+          continue;
+        }
+      }
       try {
-        await opts.awork.createTaskComment(vorgang.taskId, KOMMENTAR_TEXT, vorgang.aworkUserId);
         opts.store.markiereKommentiert(vorgang.id);
+        unmarkiertGeschrieben.delete(vorgang.id);
         geschrieben += 1;
       } catch (fehler) {
-        // Der Vorgang bleibt stehen und wird beim nächsten Lauf erneut
-        // versucht — bis zur Fehlversuchsgrenze.
-        opts.store.zaehleFehlversuch(vorgang.id);
+        // KEIN zaehleFehlversuch: der Kommentar steht in awork, nur unser
+        // Protokoll hinkt hinterher. Vermerken, damit der nächste Lauf für
+        // diesen Vorgang ausschließlich die Markierung nachholt.
+        unmarkiertGeschrieben.add(vorgang.id);
         fehlgeschlagen += 1;
         console.error(
-          `teamboard: Kommentar für Erledigung ${vorgang.id} (Aufgabe ${vorgang.taskId}) fehlgeschlagen —`,
+          `teamboard: Kommentar für Erledigung ${vorgang.id} (Aufgabe ${vorgang.taskId}) steht in awork, ` +
+            `ließ sich aber nicht als kommentiert vermerken —`,
           fehler instanceof Error ? fehler.message : String(fehler),
         );
       }
