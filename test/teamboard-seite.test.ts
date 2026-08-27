@@ -464,6 +464,52 @@ describe("renderSeite", () => {
     expect(fuelleBlock).toContain("erledigt.aufgabeId === offeneAufgabeId");
     expect(fuelleBlock).toContain("baueErledigenBereich(");
   });
+
+  // ── Task 8, Fix-Runde 1 ───────────────────────────────────────────────
+
+  it("gibt den Erledigen-Zustand beim Schließen und beim Öffnen einer anderen Aufgabe frei — er darf die Panel-Ansicht nicht überleben (Fix-Runde 1)", () => {
+    const html = renderSeite(stand(), null);
+    // Scheitert /rueckgaengig (fenster_abgelaufen, schon_rueckgaengig,
+    // nicht_gewechselt), bleibt die Kartenkopie liegen: beendeUndo() wird auf
+    // diesem Pfad nie erreicht. Ohne Freigabe hier fiele fuellePanel()
+    // dauerhaft auf die eingefrorene Kopie zurück — das Panel schlösse nie
+    // mehr und zeigte veraltete Daten.
+    const schliessenBlock = html.split("function schliessePanel()")[1]?.split("\n  }")[0];
+    expect(schliessenBlock).toContain("beendeUndo();");
+    const oeffnenBlock = html.split("function oeffnePanel(")[1]?.split("\n  }")[0];
+    expect(oeffnenBlock).toContain("erledigt.aufgabeId !== aufgabeId");
+    expect(oeffnenBlock).toContain("beendeUndo();");
+    // Und der Ticker baut kein fremdes Panel im Sekundentakt neu auf.
+    const tickerBlock = html.split("function tickeUndo()")[1]?.split("\n  }")[0];
+    expect(tickerBlock).toContain("erledigt.aufgabeId !== offeneAufgabeId");
+    expect(tickerBlock).toContain("beendeUndo();");
+  });
+
+  it("zeigt für die soeben erledigte Karte nie wieder einen Erledigt-Knopf — nach Fensterablauf oder gescheitertem Undo bleibt es beim Text (Fix-Runde 1)", () => {
+    const html = renderSeite(stand(), null);
+    const bereich = html.split("function baueErledigenBereich(")[1]?.split("\n  }")[0];
+    // Der frühe Ausstieg hängt an der Kartenzugehörigkeit, NICHT an der
+    // vorgangId — sonst rendert der Fehlerpfad wieder einen aktiven Knopf
+    // für eine bereits erledigte Aufgabe, dessen Klick erneut POSTet.
+    expect(bereich).toContain("if (erledigt !== null && erledigt.aufgabeId === aufgabe.id) {");
+    expect(bereich).toContain('"Als erledigt gemeldet."');
+  });
+
+  it("pinnt die Argumentreihenfolge am Aufrufort von darfErledigen — vertauschte Argumente gäben jedem zugeordneten Nutzer Admin-Rechte in der Oberfläche (Fix-Runde 1)", () => {
+    const html = renderSeite(stand(), null);
+    expect(html).toContain("darfErledigen(aufgabe, eigeneAworkId, istAdmin)");
+  });
+
+  it("sperrt den Erledigt-Knopf beim ersten Klick — ein zweiter POST bekäme laeuft_bereits und schriebe seinen Fehlertext über den laufenden Countdown (Fix-Runde 1)", () => {
+    const html = renderSeite(stand(), null);
+    const bereich = html.split("function baueErledigenBereich(")[1]?.split("\n  }")[0];
+    expect(bereich).toContain("knopf.disabled = erledigenLaeuft;");
+    expect(bereich).toContain("knopf.disabled = true;");
+    const block = html.split("function erledige(")[1]?.split("\n  }")[0];
+    expect(block).toContain("if (erledigenLaeuft) return;");
+    expect(block).toContain("erledigenLaeuft = true;");
+    expect(block).toContain("erledigenLaeuft = false;");
+  });
 });
 
 describe("uhrText (P1 — reine Funktion, die auch im Client-Skript läuft)", () => {
@@ -947,6 +993,8 @@ function makeRealApp() {
     role: "member",
     password: "member-pass-123",
   });
+  // awork-Zuordnung, damit der eingebettete Betrachter unterscheidbar ist.
+  users.setAworkUserId(member.id, "u-lea");
   return { app, member };
 }
 
@@ -959,6 +1007,14 @@ describe("Wiring (Muster C): /teamboard im echten App-Aufbau", () => {
     expect(res.headers["content-type"]).toContain("text/html");
     expect(res.text).toContain("<title>Teamboard</title>");
     expect(res.text).not.toContain("SPA-Catchall-Stub");
+  });
+
+  it("bettet den Betrachter des Aufrufers in die ausgelieferte Seite ein — nicht nur in die /board-Antwort (Task 8, Fix-Runde 1)", async () => {
+    const { app, member } = makeRealApp();
+    const cookie = await loginCookie(app, member.email, "member-pass-123");
+    const res = await request(app).get("/teamboard").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('"betrachter":{"aworkUserId":"u-lea","istAdmin":false}');
   });
 
   it("trägt den CSP-Header von helmet (auch für /teamboard, kein Pfad-Ausschluss)", async () => {

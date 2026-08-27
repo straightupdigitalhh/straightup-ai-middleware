@@ -8,6 +8,7 @@ import { createAuthRouter } from '../src/routes/auth.js';
 import { createPageAuth } from '../src/services/auth.js';
 import { createTeamboardPageRouter } from '../src/routes/teamboard.js';
 import type { BoardLader, BoardStand } from '../src/services/teamboard/daten.js';
+import type { Betrachter } from '../src/services/teamboard/seite.js';
 
 const STUB_MARKER = 'STUB-RENDER-MARKER';
 
@@ -26,13 +27,24 @@ const boardStandFixture: BoardStand = {
 // global vorgeschaltet zu sein — mit injiziertem ladeBoard/renderSeite-Stub
 // statt dem echten renderSeite.
 
-function makeApp(opts: { ladeBoard?: BoardLader; renderSeite?: (stand: BoardStand) => string } = {}) {
+function makeApp(
+  opts: {
+    ladeBoard?: BoardLader;
+    // Task 8, Fix-Runde 1: der Stub trägt den Betrachter-Parameter mit —
+    // sonst könnte diese Datei einen Page-Router, der ihn vergisst, nie
+    // bemerken (weniger Parameter sind zuweisbar und compilieren stumm).
+    renderSeite?: (stand: BoardStand, betrachter: Betrachter | null) => string;
+  } = {},
+) {
   const db = openDb(':memory:');
   const users = new UserStore(db);
   const sessions = new SessionStore(db, users);
 
   const ladeBoard = opts.ladeBoard ?? (async () => boardStandFixture);
-  const renderSeite = opts.renderSeite ?? ((stand) => `<!doctype html><p>${STUB_MARKER} ${stand.board.lanes.length}</p>`);
+  const renderSeite =
+    opts.renderSeite ??
+    ((stand, betrachter) =>
+      `<!doctype html><p>${STUB_MARKER} ${stand.board.lanes.length} ${JSON.stringify(betrachter)}</p>`);
 
   const app = express();
   app.use(express.json());
@@ -40,6 +52,8 @@ function makeApp(opts: { ladeBoard?: BoardLader; renderSeite?: (stand: BoardStan
   app.use(createTeamboardPageRouter({ ladeBoard, renderSeite, pageAuth: createPageAuth(sessions, '/app/') }));
 
   const member = users.create({ email: 'team@straightup-digital.de', name: 'Team', role: 'member', password: 'member-pass-123' });
+  // awork-Zuordnung, damit der durchgereichte Betrachter unterscheidbar ist.
+  users.setAworkUserId(member.id, 'u-lea');
   return { app, db, users, sessions, member };
 }
 
@@ -66,6 +80,16 @@ describe('GET /teamboard — Session-Guard', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.text).toContain(STUB_MARKER);
+  });
+
+  it('(b2) reicht den Betrachter des Aufrufers an renderSeite durch (Task 8, Fix-Runde 1)', async () => {
+    const { app, member } = makeApp();
+    const cookie = await loginCookie(app, member.email, 'member-pass-123');
+    const res = await request(app).get('/teamboard').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    // Der Seiten-Router muss den Betrachter selbst aus der Session bilden —
+    // BoardStand trägt ihn nicht.
+    expect(res.text).toContain('{"aworkUserId":"u-lea","istAdmin":false}');
   });
 
   it('(c) abgelaufene Session → 302', async () => {

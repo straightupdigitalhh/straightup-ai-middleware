@@ -470,6 +470,10 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
   // Panel noch im Undo-Fenster unter dem Rückgängig-Knopf weg.
   var erledigt = null;
   var undoTicker = null;
+  // Läuft gerade ein /erledigen-POST? Sperrt den Knopf gegen Doppelklick:
+  // der zweite Versuch bekäme "laeuft_bereits" und schriebe seinen
+  // Fehlertext über einen laufenden, funktionierenden Countdown.
+  var erledigenLaeuft = false;
   // Text der letzten Fehlerantwort — IMMER die message aus der Serverantwort,
   // nie ein im Client erfundener Text.
   var panelFehlerText = null;
@@ -882,9 +886,11 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
   function oeffnePanel(aufgabeId, laneId) {
     offeneAufgabeId = aufgabeId;
     offeneLaneId = laneId;
-    // Ein Fehlertext gehört zur zuvor gezeigten Aufgabe — nicht mit ins
-    // frisch geöffnete Panel schleppen.
+    // Fehlertext und Erledigen-Zustand gehören zur zuvor gezeigten Aufgabe —
+    // nicht mit ins frisch geöffnete Panel schleppen. Bliebe die Kopie einer
+    // anderen Aufgabe liegen, fiele fuellePanel() später auf sie zurück.
     panelFehlerText = null;
+    if (erledigt !== null && erledigt.aufgabeId !== aufgabeId) beendeUndo();
     var panel = document.getElementById("panel");
     panel.hidden = false;
     fuellePanel();
@@ -899,6 +905,11 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
     offeneAufgabeId = null;
     offeneLaneId = null;
     panelFehlerText = null;
+    // Der Erledigen-Zustand darf die Panel-Ansicht nicht überleben: sonst
+    // bliebe die eingefrorene Kartenkopie für immer liegen (der Fehlerpfad
+    // des Undo erreicht beendeUndo() sonst nie), fuellePanel() fiele
+    // dauerhaft darauf zurück und der Ticker liefe für ein fremdes Panel.
+    beendeUndo();
     var panel = document.getElementById("panel");
     panel.classList.remove("offen");
     panel.hidden = true;
@@ -970,16 +981,21 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
     if (panelFehlerText) {
       bereich.appendChild(el("div", "panel-fehler", panelFehlerText));
     }
-    if (erledigt !== null && erledigt.aufgabeId === aufgabe.id && erledigt.vorgangId !== null) {
+    // Der frühe Ausstieg hängt an der Kartenzugehörigkeit, NICHT an der
+    // vorgangId: nach Fensterablauf oder gescheitertem Undo bliebe es sonst
+    // bei einem aktiven Erledigt-Knopf für eine bereits erledigte Aufgabe.
+    if (erledigt !== null && erledigt.aufgabeId === aufgabe.id) {
       bereich.appendChild(el("div", "panel-erledigt", "Als erledigt gemeldet."));
-      // Die Restdauer stammt ausschließlich aus der Serverantwort
-      // (undoSekunden) — im Client steht keine Fensterlänge.
-      var zurueck = el("button", "erledigt-btn", "Rückgängig (" + erledigt.restSekunden + " s)");
-      zurueck.type = "button";
-      zurueck.addEventListener("click", function () {
-        macheRueckgaengig();
-      });
-      bereich.appendChild(zurueck);
+      if (erledigt.vorgangId !== null) {
+        // Die Restdauer stammt ausschließlich aus der Serverantwort
+        // (undoSekunden) — im Client steht keine Fensterlänge.
+        var zurueck = el("button", "erledigt-btn", "Rückgängig (" + erledigt.restSekunden + " s)");
+        zurueck.type = "button";
+        zurueck.addEventListener("click", function () {
+          macheRueckgaengig();
+        });
+        bereich.appendChild(zurueck);
+      }
       return bereich;
     }
     // Der Betrachter hängt an den Board-Daten (Route, nicht Cache); via
@@ -990,7 +1006,10 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
     if (darfErledigen(aufgabe, eigeneAworkId, istAdmin)) {
       var knopf = el("button", "erledigt-btn", "Erledigt");
       knopf.type = "button";
+      // Sperre überlebt ein Neuzeichnen während des laufenden POST.
+      knopf.disabled = erledigenLaeuft;
       knopf.addEventListener("click", function () {
+        knopf.disabled = true;
         erledige(aufgabe, laneName);
       });
       bereich.appendChild(knopf);
@@ -1012,6 +1031,13 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
 
   function tickeUndo() {
     if (erledigt === null) return;
+    // Gehört der Vorgang nicht mehr zur offenen Aufgabe, hier aufräumen —
+    // sonst baute der Ticker jede Sekunde ein fremdes Panel neu auf
+    // (Fokus- und Auswahlverlust).
+    if (erledigt.aufgabeId !== offeneAufgabeId) {
+      beendeUndo();
+      return;
+    }
     erledigt.restSekunden = erledigt.restSekunden - 1;
     if (erledigt.restSekunden > 0) {
       fuellePanel();
@@ -1025,6 +1051,8 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
   }
 
   function erledige(aufgabe, laneName) {
+    if (erledigenLaeuft) return;
+    erledigenLaeuft = true;
     panelFehlerText = null;
     fetch("/api/teamboard/erledigen", {
       method: "POST",
@@ -1043,6 +1071,7 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
         });
       })
       .then(function (antwort) {
+        erledigenLaeuft = false;
         if (!antwort) return;
         if (!antwort.ok) {
           panelFehlerText = antwort.koerper.message;
@@ -1061,6 +1090,7 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
         fuellePanel();
       })
       .catch(function (fehler) {
+        erledigenLaeuft = false;
         console.warn("teamboard: Erledigen fehlgeschlagen", fehler);
       });
   }
