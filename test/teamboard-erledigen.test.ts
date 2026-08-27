@@ -266,9 +266,38 @@ describe("erstelleErledigenDienst", () => {
 
     expect(ergebnis).toEqual({ ok: false, fehler: "nicht_gewechselt" });
     expect(awork.changeTaskStatus).toHaveBeenCalledTimes(1);
-    expect(awork.getTask).toHaveBeenCalledTimes(2); // vorher lesen + nachlesen
+    // vorher lesen + nachlesen + zweiter Blick (I2)
+    expect(awork.getTask).toHaveBeenCalledTimes(3);
     expect(store.findeOffenenVorgang("task-1", MAX_KOMMENTAR_FEHLVERSUCHE)).toBeUndefined();
     expect(cacheVerwerfen).not.toHaveBeenCalled();
+  });
+
+  it("(f3) legt den Vorgang an, wenn erst der ZWEITE Blick done zeigt — Read-after-Write über zwei HTTP-Anfragen ist nicht garantiert (I2)", async () => {
+    const nutzer = neuerNutzer();
+    const { awork } = fakeAwork();
+    let getTaskAufrufe = 0;
+    awork.getTask.mockImplementation(async (_taskId: string) => {
+      getTaskAufrufe += 1;
+      // 1 = Vorher-Lesen, 2 = Nachlesen mit noch altem Status (awork hat den
+      // Wechsel mit 204 angenommen), 3 = zweiter Blick, jetzt done.
+      if (getTaskAufrufe < 3) return aworkAufgabe("task-1");
+      return aworkAufgabe("task-1", { taskStatusId: STATUS.fertig.id, taskStatus: STATUS.fertig });
+    });
+    const { dienst, cacheVerwerfen } = baueDienst({ awork, karten: [karte("task-1", ["aw-lea"])] });
+
+    const ergebnis = await dienst.erledige({
+      taskId: "task-1",
+      userId: nutzer.id,
+      aworkUserId: "aw-lea",
+      istAdmin: false,
+    });
+
+    expect(ergebnis.ok).toBe(true);
+    expect(awork.changeTaskStatus).toHaveBeenCalledTimes(1); // NICHT zweimal geschrieben
+    expect(getTaskAufrufe).toBe(3);
+    const vorgang = store.finde((ergebnis as { ok: true; vorgangId: number }).vorgangId)!;
+    expect(vorgang.alterStatusId).toBe(STATUS.arbeit.id);
+    expect(cacheVerwerfen).toHaveBeenCalledTimes(1);
   });
 
   it("(f2) legt den Vorgang trotzdem an, wenn das Nachlesen wirft — sonst ginge das Undo still verloren", async () => {

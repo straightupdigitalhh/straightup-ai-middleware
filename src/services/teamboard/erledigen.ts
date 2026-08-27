@@ -50,6 +50,15 @@ const KOMMENTAR_TEXT = "Erledigt über das Teamboard.";
  */
 export const KOMMENTAR_KARENZ_MS = 15_000;
 
+/**
+ * Pause vor dem zweiten Blick auf die Aufgabe nach dem Statuswechsel. awork
+ * bestätigt den Wechsel mit 204; das unmittelbar folgende GET /tasks/{id}
+ * ist eine eigene HTTP-Anfrage und kann noch den alten Stand liefern
+ * (Read-after-Write über zwei Anfragen ist nirgends zugesichert). Kurz
+ * genug, dass der Klick sich weiterhin unmittelbar anfühlt.
+ */
+const NACHLESE_WARTE_MS = 500;
+
 // ─── Dienst ──────────────────────────────────────────────────────
 
 export function erstelleErledigenDienst(opts: {
@@ -161,23 +170,20 @@ export function erstelleErledigenDienst(opts: {
     // 5. Schreiben und nachlesen: changeTaskStatus antwortet 204 mit leerem
     //    Body — ein ausbleibender Fehler beweist den Wechsel NICHT.
     await opts.awork.changeTaskStatus(a.taskId, doneStatusId);
-    let nachher: Awaited<ReturnType<typeof opts.awork.getTask>> = null;
-    let nachleseGescheitert = false;
-    try {
-      nachher = await opts.awork.getTask(a.taskId);
-    } catch (fehler) {
-      // Der Wechsel ist bereits raus — nur die Bestätigung fehlt. Hier
-      // abzubrechen hiesse: Aufgabe in awork womöglich erledigt, aber kein
-      // Vorgang gespeichert, also kein Undo und nie ein Kommentar. Ein still
-      // verlorenes Undo wiegt schwerer als ein unbestätigter Wechsel, darum
-      // wird der Vorgang trotzdem angelegt.
-      nachleseGescheitert = true;
-      console.error(
-        `teamboard: Nachlesen nach Statuswechsel an Aufgabe ${a.taskId} fehlgeschlagen —`,
-        fehler instanceof Error ? fehler.message : String(fehler),
-      );
+    let nachlese = await leseNach(a.taskId);
+    if (!nachlese.gescheitert && nachlese.aufgabe?.taskStatus?.type !== "done") {
+      // Der Wechsel kann angenommen und trotzdem noch nicht sichtbar sein:
+      // 204 und das folgende GET sind zwei getrennte HTTP-Anfragen. Ein
+      // vorschnelles nicht_gewechselt hiesse hier: Aufgabe in awork erledigt,
+      // aber kein Vorgang, kein Undo, kein Kommentar, keine Protokollzeile —
+      // genau der Zustand, den dieses Feature verhindern soll. Darum ein
+      // zweiter Blick nach kurzer Pause.
+      await new Promise((fertig) => setTimeout(fertig, NACHLESE_WARTE_MS));
+      nachlese = await leseNach(a.taskId);
     }
-    if (!nachleseGescheitert && nachher?.taskStatus?.type !== "done") {
+    if (!nachlese.gescheitert && nachlese.aufgabe?.taskStatus?.type !== "done") {
+      // Auch der zweite Blick zeigt kein done — awork hat den Wechsel wirklich
+      // nicht übernommen.
       return { ok: false, fehler: "nicht_gewechselt" };
     }
 
@@ -193,6 +199,29 @@ export function erstelleErledigenDienst(opts: {
     });
     opts.cacheVerwerfen();
     return { ok: true, vorgangId: vorgang.id };
+  }
+
+  /**
+   * Nachlesen nach dem Statuswechsel. Wirft getTask, ist der Wechsel bereits
+   * raus und nur die Bestätigung fehlt: abzubrechen hiesse Aufgabe in awork
+   * womöglich erledigt, aber kein Vorgang gespeichert — also kein Undo und
+   * nie ein Kommentar. Ein still verlorenes Undo wiegt schwerer als ein
+   * unbestätigter Wechsel, darum meldet der Fehlerfall `gescheitert` und der
+   * Aufrufer legt den Vorgang trotzdem an.
+   */
+  async function leseNach(taskId: string): Promise<{
+    gescheitert: boolean;
+    aufgabe: Awaited<ReturnType<typeof opts.awork.getTask>>;
+  }> {
+    try {
+      return { gescheitert: false, aufgabe: await opts.awork.getTask(taskId) };
+    } catch (fehler) {
+      console.error(
+        `teamboard: Nachlesen nach Statuswechsel an Aufgabe ${taskId} fehlgeschlagen —`,
+        fehler instanceof Error ? fehler.message : String(fehler),
+      );
+      return { gescheitert: true, aufgabe: null };
+    }
   }
 
   async function macheRueckgaengig(a: {
