@@ -153,6 +153,20 @@ describe('TeamboardErledigungenStore', () => {
     ).not.toContain(fehlgeschlagen.id);
   });
 
+  it('markiereKommentiert lässt einen widerrufenen Vorgang unberührt — das Rennen aus I1 darf nicht als "kommentiert" enden', () => {
+    const user = newUser();
+    const vor30s = new Date(Date.now() - 30_000);
+    const e = anlegen(user.id, 'awork-1', { jetzt: vor30s });
+    // Genau die Reihenfolge des Rennens: der Undo-Pfad markiert, während der
+    // Kommentarlauf denselben Vorgang schon in der Hand hat.
+    store.markiereRueckgaengig(e.id);
+
+    store.markiereKommentiert(e.id);
+
+    expect(store.finde(e.id)?.kommentarAm).toBeNull();
+    expect(store.finde(e.id)?.rueckgaengigAm).toBeTypeOf('string');
+  });
+
   describe('findeOffenenVorgang', () => {
     it('frisch angelegter Vorgang wird gefunden', () => {
       const user = newUser();

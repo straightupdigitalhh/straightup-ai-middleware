@@ -34,6 +34,22 @@ export type RueckgaengigFehler =
 /** Zurechnungskommentar, den awork nach Ablauf des Undo-Fensters bekommt. */
 const KOMMENTAR_TEXT = "Erledigt über das Teamboard.";
 
+/**
+ * Zusätzliche Wartezeit über UNDO_FENSTER_MS hinaus, bevor ein Vorgang
+ * kommentiert wird.
+ *
+ * Ein Undo-Klick in der letzten Sekunde des Fensters besteht die
+ * Fensterprüfung, braucht danach aber noch zwei awork-Runden
+ * (changeTaskStatus + Nachlesen), bis `rueckgaengig_am` gesetzt ist. In
+ * dieser Spanne sähe der Minutenlauf den Vorgang als offen und fällig und
+ * schriebe den Kommentar für eine Erledigung, die gerade widerrufen wird —
+ * Spec §2 sagt aber ausdrücklich: bei Rückgängig entsteht in awork gar kein
+ * Kommentar. Die Karenz deckt diese zwei Roundtrips ab; der dadurch
+ * entstehende Zeitversatz (Fenster + Karenz + bis zu einer Minute Takt)
+ * bleibt in dem von der Spec erlaubten Rahmen.
+ */
+export const KOMMENTAR_KARENZ_MS = 15_000;
+
 // ─── Dienst ──────────────────────────────────────────────────────
 
 export function erstelleErledigenDienst(opts: {
@@ -211,7 +227,10 @@ export function erstelleErledigenDienst(opts: {
   }
 
   async function schreibeFaelligeKommentare(): Promise<{ geschrieben: number; fehlgeschlagen: number }> {
-    const faellige = opts.store.offeneKommentare(UNDO_FENSTER_MS, MAX_KOMMENTAR_FEHLVERSUCHE);
+    const faellige = opts.store.offeneKommentare(
+      UNDO_FENSTER_MS + KOMMENTAR_KARENZ_MS,
+      MAX_KOMMENTAR_FEHLVERSUCHE,
+    );
     let geschrieben = 0;
     let fehlgeschlagen = 0;
     for (const vorgang of faellige) {

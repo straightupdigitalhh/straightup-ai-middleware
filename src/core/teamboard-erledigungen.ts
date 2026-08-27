@@ -119,9 +119,16 @@ export class TeamboardErledigungenStore {
     return rows.map(toErledigung);
   }
 
+  /**
+   * Markiert den geschriebenen Zurechnungskommentar. `rueckgaengig_am IS NULL`
+   * gehört zwingend in die Bedingung: zwischen der Auswahl in
+   * offeneKommentare() und diesem UPDATE kann der Undo-Pfad denselben Vorgang
+   * widerrufen haben. Ein bedingungsloses UPDATE schriebe dann für eine
+   * widerrufene Erledigung „kommentiert" ins Protokoll.
+   */
   markiereKommentiert(id: number, jetzt?: Date): void {
     this.db.prepare(
-      'UPDATE teamboard_erledigungen SET kommentar_am = ? WHERE id = ?',
+      'UPDATE teamboard_erledigungen SET kommentar_am = ? WHERE id = ? AND rueckgaengig_am IS NULL',
     ).run((jetzt ?? new Date()).toISOString(), id);
   }
 

@@ -7,7 +7,10 @@ import {
   UNDO_FENSTER_MS,
   MAX_KOMMENTAR_FEHLVERSUCHE,
 } from "../src/core/teamboard-erledigungen.js";
-import { erstelleErledigenDienst } from "../src/services/teamboard/erledigen.js";
+import {
+  erstelleErledigenDienst,
+  KOMMENTAR_KARENZ_MS,
+} from "../src/services/teamboard/erledigen.js";
 import type { AufgabenKarte } from "../src/services/teamboard/board.js";
 import type { BoardStand } from "../src/services/teamboard/daten.js";
 
@@ -582,9 +585,10 @@ describe("erstelleErledigenDienst", () => {
       ok: false,
       fehler: "fenster_abgelaufen",
     });
-    // Gegenprobe: derselbe Vorgang ist für den Kommentarlauf bereits fällig.
-    // Beides gleichzeitig zulässig wäre genau die Überlappung, die > statt >=
-    // offen liesse.
+    // Gegenprobe: für die Abfrage des Kommentarlaufs ist derselbe Vorgang
+    // bereits fällig. Beides gleichzeitig zulässig wäre genau die
+    // Überlappung, die > statt >= offen liesse. (Der Dienst wartet seit I1
+    // zusätzlich KOMMENTAR_KARENZ_MS ab — hier zählt die reine Grenze.)
     expect(
       store.offeneKommentare(UNDO_FENSTER_MS, MAX_KOMMENTAR_FEHLVERSUCHE).map((e) => e.id),
     ).toContain(vorgang.id);
@@ -646,13 +650,13 @@ describe("erstelleErledigenDienst", () => {
     const faellig = legeVorgangAn({
       userId: nutzer.id,
       taskId: "task-faellig",
-      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - 1_000),
+      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - KOMMENTAR_KARENZ_MS - 1_000),
     });
     const frisch = legeVorgangAn({ userId: nutzer.id, taskId: "task-frisch" });
     const widerrufen = legeVorgangAn({
       userId: nutzer.id,
       taskId: "task-widerrufen",
-      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - 1_000),
+      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - KOMMENTAR_KARENZ_MS - 1_000),
     });
     store.markiereRueckgaengig(widerrufen.id);
 
@@ -670,6 +674,49 @@ describe("erstelleErledigenDienst", () => {
     expect(store.finde(widerrufen.id)!.kommentarAm).toBeNull();
   });
 
+  it("(i1b) wartet über das Undo-Fenster hinaus die Karenz ab — ein Vorgang am Fensterrand bekommt noch keinen Kommentar (I1)", async () => {
+    const nutzer = neuerNutzer();
+    const { awork } = fakeAwork();
+    const { dienst } = baueDienst({ awork, karten: [] });
+    // Genau der Vorgang aus dem Befund: das Undo-Fenster ist gerade vorbei,
+    // der Undo-Roundtrip nach awork kann aber noch unterwegs sein.
+    const amRand = legeVorgangAn({
+      userId: nutzer.id,
+      taskId: "task-rand",
+      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - 1_000),
+    });
+
+    expect(await dienst.schreibeFaelligeKommentare()).toEqual({ geschrieben: 0, fehlgeschlagen: 0 });
+    expect(awork.createTaskComment).not.toHaveBeenCalled();
+    expect(store.finde(amRand.id)!.kommentarAm).toBeNull();
+    // Gegenprobe: der Store selbst hält ihn längst für fällig — die Karenz
+    // sitzt im Dienst, nicht in der Abfrage.
+    expect(
+      store.offeneKommentare(UNDO_FENSTER_MS, MAX_KOMMENTAR_FEHLVERSUCHE).map((e) => e.id),
+    ).toContain(amRand.id);
+  });
+
+  it("(i1c) schreibt keinen Kommentar mehr, wenn der Vorgang zwischen Auswahl und awork-Aufruf widerrufen wurde (I1, zweite Hälfte)", async () => {
+    const nutzer = neuerNutzer();
+    const { awork } = fakeAwork();
+    const { dienst } = baueDienst({ awork, karten: [] });
+    const vorgang = legeVorgangAn({
+      userId: nutzer.id,
+      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - KOMMENTAR_KARENZ_MS - 1_000),
+    });
+    // Der Undo-Pfad markiert, während der Kommentarlauf den Vorgang bereits
+    // ausgewählt hat und in awork hängt.
+    awork.createTaskComment.mockImplementation(async () => {
+      store.markiereRueckgaengig(vorgang.id);
+    });
+
+    await dienst.schreibeFaelligeKommentare();
+
+    // Der Vorgang darf NICHT als kommentiert gelten: er ist widerrufen.
+    expect(store.finde(vorgang.id)!.kommentarAm).toBeNull();
+    expect(store.finde(vorgang.id)!.rueckgaengigAm).not.toBeNull();
+  });
+
   it("(i2) zählt bei einem awork-Fehler einen Fehlversuch und lässt den Vorgang stehen", async () => {
     const nutzer = neuerNutzer();
     const { awork } = fakeAwork();
@@ -677,7 +724,7 @@ describe("erstelleErledigenDienst", () => {
     const { dienst } = baueDienst({ awork, karten: [] });
     const vorgang = legeVorgangAn({
       userId: nutzer.id,
-      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - 1_000),
+      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - KOMMENTAR_KARENZ_MS - 1_000),
     });
     const stillerLog = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -696,7 +743,7 @@ describe("erstelleErledigenDienst", () => {
     const { dienst } = baueDienst({ awork, karten: [] });
     const vorgang = legeVorgangAn({
       userId: nutzer.id,
-      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - 1_000),
+      jetzt: new Date(Date.now() - UNDO_FENSTER_MS - KOMMENTAR_KARENZ_MS - 1_000),
     });
     const stillerLog = vi.spyOn(console, "error").mockImplementation(() => {});
     for (let i = 0; i < MAX_KOMMENTAR_FEHLVERSUCHE; i++) store.zaehleFehlversuch(vorgang.id);
