@@ -101,6 +101,7 @@ export interface OffeneAufgabe {
   statusTyp: string; // todo | progress | review | stuck (done ist rausgefiltert)
   faelligAm: string | null; // dueOn, ISO
   istPrio: boolean;
+  istWiederkehrend: boolean;
   assigneeIds: string[];
 }
 
@@ -113,7 +114,18 @@ interface AworkAvailableTaskRaw {
   taskStatus?: { name: string; type: string } | null;
   dueOn?: string | null;
   isPrio?: boolean;
+  isRecurring?: boolean;
   assignees?: { id: string }[];
+}
+
+/** Rohform von GET /tasks/{taskId} (nur intern für getTask). */
+interface AworkTaskDetailRaw {
+  id: string;
+  name: string;
+  taskStatusId?: string | null;
+  taskStatus?: { id: string; name: string; type: string } | null;
+  projectId?: string | null;
+  isRecurring?: boolean;
 }
 
 /** E-Mail eines awork-Users aus den Kontaktinfos (bevorzugt "work"). */
@@ -385,6 +397,7 @@ export class AworkClient {
       statusTyp: t.taskStatus?.type ?? 'todo',
       faelligAm: t.dueOn ?? null,
       istPrio: t.isPrio === true,
+      istWiederkehrend: t.isRecurring === true,
       assigneeIds: (t.assignees ?? []).map((a) => a.id),
     }));
   }
@@ -420,5 +433,70 @@ export class AworkClient {
       typ: res.headers.get('content-type') ?? 'application/octet-stream',
       bytes: Buffer.from(await res.arrayBuffer()),
     };
+  }
+
+  // ─── Teamboard: Schreibzugriffe ─────────────────────────────
+  // Ab hier schreibt der Client aktiv (Statuswechsel, Kommentar) — bis
+  // Stufe 2 war awork ausschließlich lesend angebunden. getTaskStatuses
+  // und getTask lesen zwar nur, gehören aber zum selben Schreibpfad
+  // (Status-ID ermitteln bzw. nach dem Wechsel nachlesen, ob er griff).
+
+  /** Status-Liste eines Projekts, z. B. um die "done"-Status-ID zu finden. */
+  async getTaskStatuses(projectId: string): Promise<{ id: string; name: string; type: string }[]> {
+    const data = await this.request<{ id: string; name: string; type: string }[]>(
+      `/projects/${projectId}/taskstatuses`
+    );
+    return data.map((s) => ({ id: s.id, name: s.name, type: s.type }));
+  }
+
+  /**
+   * Setzt den Status einer Aufgabe. Body ist lt. awork-API ein Array
+   * ([{taskId, statusId}]); Antwort ist 204 mit leerem Body — ob der
+   * Wechsel geklappt hat, ist NUR durch Nachlesen der Aufgabe (getTask)
+   * feststellbar. Wirft bei HTTP-Fehler.
+   */
+  async changeTaskStatus(taskId: string, statusId: string): Promise<void> {
+    await this.request(`/tasks/changestatuses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([{ taskId, statusId }]),
+    });
+  }
+
+  /**
+   * Einzelne Aufgabe. Anders als die Sammlung (GET /tasks, für unseren
+   * Token gesperrt) funktioniert dieser Pfad. null bei 404.
+   */
+  async getTask(taskId: string): Promise<{
+    id: string;
+    name: string;
+    taskStatusId: string | null;
+    taskStatus: { id: string; name: string; type: string } | null;
+    projectId: string | null;
+    isRecurring: boolean;
+  } | null> {
+    try {
+      const raw = await this.request<AworkTaskDetailRaw>(`/tasks/${taskId}`);
+      return {
+        id: raw.id,
+        name: raw.name,
+        taskStatusId: raw.taskStatusId ?? null,
+        taskStatus: raw.taskStatus ?? null,
+        projectId: raw.projectId ?? null,
+        isRecurring: raw.isRecurring === true,
+      };
+    } catch (fehler) {
+      if (fehler instanceof Error && fehler.message.startsWith('awork API 404 ')) return null;
+      throw fehler;
+    }
+  }
+
+  /** Kommentar an einer Aufgabe (z. B. Zurechnung "erledigt via Teamboard"). */
+  async createTaskComment(taskId: string, message: string, userId: string): Promise<void> {
+    await this.request(`/tasks/${taskId}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, userId }),
+    });
   }
 }

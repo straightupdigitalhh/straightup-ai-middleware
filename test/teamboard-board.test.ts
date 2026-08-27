@@ -63,6 +63,7 @@ function aufgabe(teile: Partial<OffeneAufgabe>): OffeneAufgabe {
     statusTyp: "todo",
     faelligAm: null,
     istPrio: false,
+    istWiederkehrend: false,
     assigneeIds: [],
     ...teile,
   };
@@ -133,5 +134,23 @@ describe("baueBoard", () => {
     });
     expect(board.lanes.find((l) => l.userId === "u-lea")!.aufgaben).toHaveLength(1);
     expect(board.lanes.find((l) => l.userId === "u-jan")!.aufgaben).toHaveLength(1);
+  });
+
+  it("gibt istWiederkehrend und assigneeIds an der Karte weiter — auch identisch in beiden Lanes bei mehreren Zuständigen", () => {
+    const board = baueBoard({
+      nutzer,
+      timer: [],
+      aufgaben: [
+        aufgabe({ id: "t-wiederkehrend", assigneeIds: ["u-lea", "u-jan"], istWiederkehrend: true }),
+      ],
+      jetzt,
+      heute,
+    });
+    const leaKarte = board.lanes.find((l) => l.userId === "u-lea")!.aufgaben[0];
+    const janKarte = board.lanes.find((l) => l.userId === "u-jan")!.aufgaben[0];
+    expect(leaKarte.istWiederkehrend).toBe(true);
+    expect(leaKarte.assigneeIds).toEqual(["u-lea", "u-jan"]);
+    expect(janKarte.istWiederkehrend).toBe(true);
+    expect(janKarte.assigneeIds).toEqual(["u-lea", "u-jan"]);
   });
 });

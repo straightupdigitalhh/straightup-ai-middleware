@@ -42,6 +42,8 @@ export interface AufgabenKarte {
   statusTyp: string;
   faelligAm: string | null;
   istPrio: boolean;
+  istWiederkehrend: boolean;
+  assigneeIds: string[];
   ueberfaellig: boolean;
 }
 
@@ -80,6 +82,8 @@ export function baueBoard(eingabe: {
           statusTyp: a.statusTyp,
           faelligAm: a.faelligAm,
           istPrio: a.istPrio,
+          istWiederkehrend: a.istWiederkehrend,
+          assigneeIds: a.assigneeIds,
           // Datums-Vergleich auf Tagesbasis: dueOn ist ein UTC-Mitternachts-
           // Stempel, "heute" kommt als Berlin-Kalendertag herein.
           ueberfaellig: a.faelligAm !== null && a.faelligAm.slice(0, 10) < eingabe.heute,
