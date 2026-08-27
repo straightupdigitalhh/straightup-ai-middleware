@@ -86,6 +86,26 @@ describe('AworkClient – neue Methoden', () => {
     expect(bodyStr).toContain('image/png');
   });
 
+  it('gibt jedem Aufruf ein Abbruch-Signal mit und reicht eine Zeitüberschreitung als Fehler durch, nie als leere Antwort (M5)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 'p1', name: 'Projekt' }));
+    await client.getProject('p1');
+    const optionen = fetchMock.mock.calls[0][1] as { signal?: AbortSignal };
+    expect(optionen.signal).toBeInstanceOf(AbortSignal);
+    expect(optionen.signal!.aborted).toBe(false);
+
+    // node-fetch bricht bei erreichtem Signal mit einem AbortError ab. Der
+    // muss durchschlagen: ein hängender Aufruf in der Minuten-Automation
+    // hielte den Lauf sonst für immer offen (Scheduler.trigger wirft für eine
+    // laufende Automation, croner schluckt den Wurf mit catch: true).
+    const abbruch = new Error('The user aborted a request.');
+    abbruch.name = 'AbortError';
+    fetchMock.mockRejectedValue(abbruch);
+    await expect(client.getProject('p1')).rejects.toThrow(/aborted/);
+    // Auch getTask darf daraus kein "Aufgabe nicht gefunden" (null) machen —
+    // nur ein echtes awork-404 führt dort zu null.
+    await expect(client.getTask('t1')).rejects.toThrow(/aborted/);
+  });
+
   it('wirft bei non-ok Response einen Fehler mit Status', async () => {
     fetchMock.mockResolvedValue({ ...jsonResponse({}, 500), ok: false, status: 500, statusText: 'ISE', text: async () => 'kaputt' });
     await expect(client.getProject('p1')).rejects.toThrow(/500/);

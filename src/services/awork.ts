@@ -137,6 +137,17 @@ export function aworkUserEmail(user: AworkUser): string | null {
 
 // ─── Client ──────────────────────────────────────────────────────
 
+/**
+ * Zeitgrenze für jeden einzelnen awork-Aufruf. Ohne sie kann eine hängende
+ * Anfrage einen Automationslauf für immer offen halten: Scheduler.trigger
+ * wirft, solange die Automation als laufend gilt, und croner ist mit
+ * `catch: true` konfiguriert und schluckt diesen Wurf lautlos — die
+ * Kommentar-Automation liefe dann nie wieder, ohne eine einzige Fehlerzeile.
+ * 30 s liegen weit über jeder normalen awork-Antwortzeit und weit unter dem
+ * Minutentakt der Automation.
+ */
+const AWORK_TIMEOUT_MS = 30_000;
+
 export class AworkClient {
   private baseUrl: string;
   private token: string;
@@ -155,6 +166,7 @@ export class AworkClient {
     const res = await fetch(url, {
       ...options,
       headers: { ...this.headers(), ...options?.headers },
+      signal: AbortSignal.timeout(AWORK_TIMEOUT_MS),
     });
 
     if (!res.ok) {
