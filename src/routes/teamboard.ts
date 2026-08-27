@@ -120,7 +120,7 @@ export function createTeamboardRouter(deps: Deps): Router {
   // Fehler-Backoff fürs Laden: NICHT pro userId, sondern global — ein
   // awork-Ausfall/Rate-Limit betrifft alle Avatare gleichzeitig (dasselbe
   // Token/Limit wie die Board-Daten, vgl. erstelleBoardLader in daten.ts).
-  // Ohne dieses Fenster würde jeder Client-Redraw (alle 30 s je offenem Tab)
+  // Ohne dieses Fenster würde jeder Client-Redraw (alle 10 s je offenem Tab)
   // während eines awork-Ausfalls erneut jeden Avatar ohne Bremse anfragen.
   let avatarFehlerBisMs: number | null = null;
 
@@ -137,7 +137,7 @@ export function createTeamboardRouter(deps: Deps): Router {
         .set('Cache-Control', 'private, max-age=600')
         // private wegen Session-Auth; kurze TTL (s. AVATAR_NEGATIV_TTL_MS) —
         // der Browser fragt nach einem neu hochgeladenen Bild zügig erneut,
-        // hört aber auf, bei jedem 30-s-Redraw sofort wieder nachzufragen.
+        // hört aber auf, bei jedem 10-s-Redraw sofort wieder nachzufragen.
         .status(404)
         .type('text/plain; charset=utf-8')
         .send('Nicht gefunden');

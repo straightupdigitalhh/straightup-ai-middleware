@@ -431,13 +431,13 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
     return;
   }
   // Bezugszeit: Serverstand + bereits bekanntes Alter → die Uhren starten
-  // exakt, auch wenn die Antwort aus dem 30-s-Cache kam.
+  // exakt, auch wenn die Antwort aus dem 10-s-Cache kam.
   var empfangenUm = Date.now();
   // Lane-IDs mit aufgeklapptem "+n weitere" — außerhalb von zeichne(), damit
-  // der alle 30s komplette Neuaufbau sie nicht vergisst.
+  // der alle 10s komplette Neuaufbau sie nicht vergisst.
   var aufgeklappteLanes = new Set();
   // Projekt-Filter-Auswahl (Task 9) — ebenfalls außerhalb von zeichne(),
-  // überlebt den 30-s-Refresh wie Scroll/Aufklappen. Wird NICHT gespeichert
+  // überlebt den 10-s-Refresh wie Scroll/Aufklappen. Wird NICHT gespeichert
   // (Spec §6) — reine Client-Variable.
   var ausgewaehltesProjekt = null;
   // Zuletzt geladene Zeitsummen je awork-userId + Hinweis (Task 9) — vom
@@ -449,7 +449,7 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
   // Drag-/Ausblenden-Aktion sofort weitergeschrieben und per PUT gesichert.
   var einstellungen = { reihenfolge: null, ausgeblendet: [] };
   // Ob die Ausgeblendet-Liste unter dem Chip gerade aufgeklappt ist —
-  // außerhalb von zeichne(), damit der 30-s-Neuaufbau sie nicht zuklappt.
+  // außerhalb von zeichne(), damit der 10-s-Neuaufbau sie nicht zuklappt.
   var ausgeblendetOffen = false;
   // Von der letzten zeichne()-Runde übrig: die sichtbaren Lanes VOR dem
   // Projekt-Filter (Basis für die Drag-Neuordnung) und die ausgeblendeten
@@ -457,7 +457,7 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
   var letzteSichtbareLanes = [];
   var letzteAusgeblendeteLanes = [];
   // Detail-Panel (Task 7): welche Aufgabe gerade offen ist — außerhalb von
-  // zeichne(), damit der 30-s-Neuaufbau das Panel nicht vergisst. Die Lane
+  // zeichne(), damit der 10-s-Neuaufbau das Panel nicht vergisst. Die Lane
   // gehört dazu, weil eine Aufgabe mehrere Zuständige haben kann: ohne sie
   // spränge die Zeile "Zuständig" beim Neubefüllen auf eine fremde Lane.
   var offeneAufgabeId = null;
@@ -926,7 +926,7 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
 
   /**
    * Befüllt ein offenes Panel aus dem aktuellen Board-Stand — nach jedem
-   * zeichne() erneut, damit Status und Fälligkeit nach dem 30-s-Nachladen
+   * zeichne() erneut, damit Status und Fälligkeit nach dem 10-s-Nachladen
    * stimmen. Gesucht wird im rohen Stand, nicht in den gefilterten Lanes:
    * ein Projekt-Filter soll das Panel nicht schließen. Ist die Aufgabe gar
    * nicht mehr im Board (erledigt, umverteilt), schließt es sich.

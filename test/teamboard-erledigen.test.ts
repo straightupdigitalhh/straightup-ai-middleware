@@ -419,7 +419,7 @@ describe("erstelleErledigenDienst", () => {
     expect(awork.getTaskStatuses).toHaveBeenCalledTimes(2);
   });
 
-  it("(j) nimmt Status-ID, Namen und Projekt aus getTask — nie aus der (bis zu 60s alten) Board-Karte", async () => {
+  it("(j) nimmt Status-ID, Namen und Projekt aus getTask — nie aus der (bis zu 20s alten) Board-Karte", async () => {
     const nutzer = neuerNutzer();
     // Die Karte ist in JEDEM Feld veraltet, das in den Schreibpfad passt:
     // anderer Status (jemand hat verschoben), alter Name, altes Projekt.

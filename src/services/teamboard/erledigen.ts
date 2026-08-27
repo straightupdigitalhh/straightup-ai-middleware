@@ -134,8 +134,8 @@ export function erstelleErledigenDienst(opts: {
     istAdmin: boolean;
   }): Promise<{ ok: true; vorgangId: number } | { ok: false; fehler: ErledigenFehler }> {
     // 1. Die Board-Karte entscheidet AUSSCHLIESSLICH die Berechtigung. Der
-    //    Board-Cache ist bis zu 30s alt und der Client zeichnet nur alle 30s
-    //    neu — real bis zu einer Minute Versatz. Jeder Wert, der später
+    //    Board-Cache ist bis zu 10s alt und der Client zeichnet nur alle 10s
+    //    neu — real bis zu 20 Sekunden Versatz. Jeder Wert, der später
     //    zurückgeschrieben wird, kommt darum aus getTask (Schritt 3).
     const { board } = await opts.ladeBoard();
     const karte = findeKarte(a.taskId, board.lanes);
