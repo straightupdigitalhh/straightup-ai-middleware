@@ -28,7 +28,9 @@ import { createTimetrackingRouter } from './routes/timetracking.js';
 import { createTeamboardRouter, createTeamboardPageRouter } from './routes/teamboard.js';
 import { erstelleBoardLader } from './services/teamboard/daten.js';
 import { erstelleZeitenLader } from './services/teamboard/zeiten.js';
+import { erstelleErledigenDienst } from './services/teamboard/erledigen.js';
 import { TeamboardEinstellungenStore } from './core/teamboard-einstellungen.js';
+import { TeamboardErledigungenStore } from './core/teamboard-erledigungen.js';
 import { renderSeite } from './services/teamboard/seite.js';
 
 // ─── Konfiguration prüfen ────────────────────────────────────────
@@ -96,6 +98,12 @@ const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
 const teamboardBoardLader = erstelleBoardLader({ client: aworkClient, ttlMs: 30_000 });
 const teamboardZeitenLader = erstelleZeitenLader({ awork: aworkClient, ttlMs: 30_000 });
 const teamboardEinstellungen = new TeamboardEinstellungenStore(db);
+const teamboardErledigenDienst = erstelleErledigenDienst({
+  awork: aworkClient,
+  store: new TeamboardErledigungenStore(db),
+  ladeBoard: teamboardBoardLader,
+  cacheVerwerfen: teamboardBoardLader.verwerfen,
+});
 
 // ─── Microsoft Graph (E-Mail-Polling + Mail-Versand) ─────────────
 // MS_MAILBOXES: kommagetrennte Liste der Postfächer, in denen die
@@ -217,7 +225,8 @@ app.use(createTeamboardRouter({
   ladeZeiten: teamboardZeitenLader,
   ladeNutzerBild: (userId) => aworkClient.getUserImage(userId),
   einstellungen: teamboardEinstellungen,
-})); // /api/teamboard/* (board/avatar: Session ODER Key; zeiten/einstellungen: nur Session)
+  erledigenDienst: teamboardErledigenDienst,
+})); // /api/teamboard/* (board/avatar: Session ODER Key; zeiten/einstellungen/erledigen/rueckgaengig: nur Session)
 
 // GET /teamboard (HTML-Seite, nur Session — kein Master-Key, das ist kein
 // API-Client). Der Guard (createPageAuth) wird dem Router als Route-

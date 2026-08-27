@@ -3,13 +3,52 @@ import { getAuth, requireAdmin } from '../services/auth.js';
 import { clientErrorMessage } from '../services/errors.js';
 import type { BoardLader, BoardStand } from '../services/teamboard/daten.js';
 import type { ZeitenProNutzer } from '../services/teamboard/zeiten.js';
+import type { ErledigenFehler, RueckgaengigFehler } from '../services/teamboard/erledigen.js';
 import type { TeamboardEinstellungen, TeamboardEinstellungenStore } from '../core/teamboard-einstellungen.js';
+import { UNDO_FENSTER_MS } from '../core/teamboard-erledigungen.js';
+
+/** Nur die zwei Methoden, die die Route tatsächlich braucht (T4, `erstelleErledigenDienst`). */
+interface ErledigenDienst {
+  erledige(a: { taskId: string; userId: string; aworkUserId: string; istAdmin: boolean }): Promise<
+    { ok: true; vorgangId: number } | { ok: false; fehler: ErledigenFehler }
+  >;
+  macheRueckgaengig(a: { vorgangId: number; userId: string }): Promise<
+    { ok: true } | { ok: false; fehler: RueckgaengigFehler }
+  >;
+}
 
 interface Deps {
   ladeBoard: BoardLader;
   ladeZeiten: () => Promise<ZeitenProNutzer>;
   ladeNutzerBild: (userId: string) => Promise<{ typ: string; bytes: Buffer } | null>;
   einstellungen: TeamboardEinstellungenStore;
+  erledigenDienst: ErledigenDienst;
+}
+
+// ─── Fehler-Zuordnung & Texte für /erledigen und /rueckgaengig ────
+//
+// Der Dienst wirft in den fachlichen Fällen nicht, sondern gibt ein
+// Ergebnisobjekt zurück — clientErrorMessage (nur für den 502-Zweig aus
+// echten awork-Ausnahmen gedacht) würde hier für jeden Fall dieselbe
+// generische Meldung liefern. Ein gemeinsamer Record deckt beide Fehler-
+// Unions ab, weil sie sich in drei Werten überschneiden.
+
+const TEXTE: Record<ErledigenFehler | RueckgaengigFehler, string> = {
+  nicht_gefunden: 'Diese Aufgabe gibt es in awork nicht mehr.',
+  keine_berechtigung: 'Du bist für diese Aufgabe nicht zuständig.',
+  schon_erledigt: 'Die Aufgabe ist bereits erledigt.',
+  laeuft_bereits: 'Für diese Aufgabe läuft gerade schon ein Erledigen-Vorgang.',
+  nicht_erledigbar: 'Diese Aufgabe hat kein Projekt oder keinen Status — sie lässt sich hier nicht erledigen.',
+  kein_done_status: 'Dieses Projekt hat keine Erledigt-Spalte.',
+  nicht_gewechselt: 'awork hat den Status nicht übernommen. Bitte in awork nachsehen.',
+  fenster_abgelaufen: 'Das Zeitfenster zum Rückgängigmachen ist abgelaufen.',
+  schon_rueckgaengig: 'Dieser Vorgang wurde bereits rückgängig gemacht.',
+};
+
+function fehlerStatus(fehler: ErledigenFehler | RueckgaengigFehler): number {
+  if (fehler === 'keine_berechtigung') return 403;
+  if (fehler === 'nicht_gefunden') return 404;
+  return 409;
 }
 
 // ─── Avatar-Cache — 1:1 aus agents/teamboard/server.ts (Stufe 1) portiert ─
@@ -240,6 +279,79 @@ export function createTeamboardRouter(deps: Deps): Router {
     } catch (e: any) {
       console.error(`❌ teamboard: Avatar-Anfrage fehlgeschlagen: ${e?.message ?? e}`);
       res.status(500).json({ error: 'internal', message: clientErrorMessage(e) });
+    }
+  });
+
+  // ─── Erledigen / Rückgängig ───────────────────────────────────
+  //
+  // Beide Routen sind nur per Session erreichbar: der Master-Key
+  // (via: 'api-key') hat keine Nutzeridentität — genau die, die der Dienst
+  // für Zuständigkeits- und Urheberprüfung braucht. Die Prüfung steht VOR
+  // jeder Dereferenz von auth.user, sonst crasht die Route für api-key-
+  // Aufrufer statt sauber 403 zu antworten. Kein eigenes CSRF-Token nötig:
+  // das Session-Cookie ist sameSite: 'lax' (routes/auth.ts) — ein Cross-
+  // Site-POST schickt es ohnehin nicht mit (Beleg: test/teamboard-route.test.ts).
+
+  router.post('/api/teamboard/erledigen', async (req: Request, res: Response) => {
+    try {
+      const auth = getAuth(res);
+      if (!auth || auth.via !== 'session') {
+        res.status(403).json({ error: 'forbidden', message: 'Nur per Session-Login' });
+        return;
+      }
+      const aworkUserId = auth.user!.aworkUserId;
+      if (!aworkUserId) {
+        res.status(403).json({
+          error: 'forbidden',
+          message: 'Für dein Konto ist keine awork-Nutzer-ID hinterlegt — bitte im Hub verknüpfen.',
+        });
+        return;
+      }
+      const { taskId } = req.body ?? {};
+      if (typeof taskId !== 'string' || !taskId) {
+        res.status(400).json({ error: 'validation', message: 'taskId ist Pflichtfeld (string)' });
+        return;
+      }
+
+      const ergebnis = await deps.erledigenDienst.erledige({
+        taskId,
+        userId: auth.user!.id,
+        aworkUserId,
+        istAdmin: auth.role === 'admin',
+      });
+      if (ergebnis.ok) {
+        res.status(200).json({ vorgangId: ergebnis.vorgangId, undoSekunden: UNDO_FENSTER_MS / 1000 });
+        return;
+      }
+      res.status(fehlerStatus(ergebnis.fehler)).json({ error: ergebnis.fehler, message: TEXTE[ergebnis.fehler] });
+    } catch (e: any) {
+      console.error(`❌ teamboard: Aufgabe erledigen fehlgeschlagen: ${e?.message ?? e}`);
+      res.status(502).json({ error: 'awork_unreachable', message: clientErrorMessage(e) });
+    }
+  });
+
+  router.post('/api/teamboard/rueckgaengig', async (req: Request, res: Response) => {
+    try {
+      const auth = getAuth(res);
+      if (!auth || auth.via !== 'session') {
+        res.status(403).json({ error: 'forbidden', message: 'Nur per Session-Login' });
+        return;
+      }
+      const { vorgangId } = req.body ?? {};
+      if (typeof vorgangId !== 'number' || !Number.isInteger(vorgangId)) {
+        res.status(400).json({ error: 'validation', message: 'vorgangId ist Pflichtfeld (ganze Zahl)' });
+        return;
+      }
+
+      const ergebnis = await deps.erledigenDienst.macheRueckgaengig({ vorgangId, userId: auth.user!.id });
+      if (ergebnis.ok) {
+        res.status(200).json({ ok: true });
+        return;
+      }
+      res.status(fehlerStatus(ergebnis.fehler)).json({ error: ergebnis.fehler, message: TEXTE[ergebnis.fehler] });
+    } catch (e: any) {
+      console.error(`❌ teamboard: Erledigung rückgängig machen fehlgeschlagen: ${e?.message ?? e}`);
+      res.status(502).json({ error: 'awork_unreachable', message: clientErrorMessage(e) });
     }
   });
 
