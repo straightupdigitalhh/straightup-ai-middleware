@@ -242,11 +242,21 @@ export class Scheduler {
    * Löscht Lauf-Protokolle, deren Start länger als `aelterAlsTage` zurückliegt.
    * Ohne dieses Aufräumen wüchse automation_runs unbegrenzt, sobald eine
    * Automation minütlich läuft (jeder Lauf legt eine Zeile an, `trigger`).
+   * `status = 'running'` ist von der Löschung ausgenommen: nur `start()`
+   * schließt hängende running-Zeilen als Fehler ab (Neustart-Fall); ein
+   * echt hängender Lauf ohne Neustart könnte sonst mitten im Betrieb
+   * verschwinden — das abschließende UPDATE in `execute()` träfe danach 0
+   * Zeilen, und `getRun(runId)!` würde trotz Non-Null-Assertion `undefined`
+   * liefern. Grenze ist inklusiv (`<=`): eine exakt `aelterAlsTage` Tage
+   * alte Zeile zählt als „alt" und wird mitgelöscht — wie bei
+   * `SessionStore.purgeExpired`.
    * Gibt die Zahl gelöschter Zeilen zurück.
    */
   loescheAlteLaeufe(aelterAlsTage: number, jetzt?: Date): number {
     const grenze = new Date((jetzt ?? new Date()).getTime() - aelterAlsTage * 24 * 60 * 60 * 1000);
-    const result = this.db.prepare('DELETE FROM automation_runs WHERE started_at <= ?').run(grenze.toISOString());
+    const result = this.db.prepare(
+      `DELETE FROM automation_runs WHERE started_at <= ? AND status != 'running'`,
+    ).run(grenze.toISOString());
     return Number(result.changes);
   }
 

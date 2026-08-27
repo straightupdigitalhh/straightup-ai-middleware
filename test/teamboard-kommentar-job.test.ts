@@ -4,6 +4,7 @@ import { Scheduler } from '../src/core/scheduler.js';
 import {
   erstelleKommentarAutomation,
   erstelleLaufAufraeumAutomation,
+  AUFRAEUM_GRENZE_TAGE,
 } from '../src/services/teamboard/kommentar-automation.js';
 
 // ─── Kommentar-Automation ─────────────────────────────────────────
@@ -72,6 +73,6 @@ describe('erstelleLaufAufraeumAutomation', () => {
     const run = await scheduler.trigger('automation-runs-aufraeumen', 'manual').done;
     expect(run.status).toBe('ok');
     expect(run.summary).toBe('5 alte Lauf-Protokolle gelöscht');
-    expect(aufgerufenMit).toBeGreaterThan(0);
+    expect(aufgerufenMit).toBe(AUFRAEUM_GRENZE_TAGE);
   });
 });

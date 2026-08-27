@@ -173,4 +173,30 @@ describe('Scheduler', () => {
 
     expect(s1.loescheAlteLaeufe(30)).toBe(1);
   });
+
+  it('loescheAlteLaeufe lässt laufende Automationen stehen, auch wenn sie alt sind', () => {
+    const db = openDb(':memory:');
+    const s1 = new Scheduler(db);
+    const TAG_MS = 24 * 60 * 60 * 1000;
+    const jetzt = new Date('2026-08-27T12:00:00.000Z');
+    const alt = new Date(jetzt.getTime() - 31 * TAG_MS).toISOString();
+    // Ein hängender Lauf ohne Neustart: nur start() räumt running-Zeilen
+    // als Fehler ab (Neustart-Fall); eine echt hängende, alte Zeile darf
+    // trotzdem nicht verschwinden — sonst träfe das UPDATE in execute()
+    // am Ende 0 Zeilen und getRun(runId)! läge trotz Non-Null-Assertion
+    // als undefined vor.
+    db.prepare(
+      `INSERT INTO automation_runs (automation_id, trigger, status, started_at) VALUES ('demo', 'schedule', 'running', ?)`,
+    ).run(alt);
+    db.prepare(
+      `INSERT INTO automation_runs (automation_id, trigger, status, started_at) VALUES ('demo', 'schedule', 'ok', ?)`,
+    ).run(alt);
+
+    const geloescht = s1.loescheAlteLaeufe(30, jetzt);
+
+    expect(geloescht).toBe(1);
+    const rows = db.prepare('SELECT status FROM automation_runs ORDER BY id').all() as { status: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('running');
+  });
 });

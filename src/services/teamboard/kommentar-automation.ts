@@ -33,8 +33,15 @@ export function erstelleKommentarAutomation(dienst: {
  * Kommentar-Automation oben läuft jede Minute — ohne dieses Aufräumen
  * wüchse automation_runs um ~525.000 Zeilen im Jahr, denn der Scheduler
  * legt für jeden Lauf eine Zeile an (scheduler.ts, trigger()).
+ *
+ * 30 Tage sind eine bewusste Wahl, kein Platzhalter: bei minütlichem Takt
+ * sind das ~1.440 Zeilen pro Tag bzw. ~43.000 für den gesamten Zeitraum —
+ * für SQLite unproblematisch und mehr als die übliche Aufbewahrung
+ * („was lief letzte Woche/letzten Monat") für die Status-Ansicht im Hub
+ * braucht. Exportiert, damit Tests denselben Wert referenzieren statt ihn
+ * zu duplizieren.
  */
-const AUFRAEUM_GRENZE_TAGE = 30;
+export const AUFRAEUM_GRENZE_TAGE = 30;
 
 /** Läuft nachts, weit außerhalb der Geschäftszeiten. */
 export function erstelleLaufAufraeumAutomation(scheduler: {
