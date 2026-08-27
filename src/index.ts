@@ -29,6 +29,7 @@ import { createTeamboardRouter, createTeamboardPageRouter } from './routes/teamb
 import { erstelleBoardLader } from './services/teamboard/daten.js';
 import { erstelleZeitenLader } from './services/teamboard/zeiten.js';
 import { erstelleErledigenDienst } from './services/teamboard/erledigen.js';
+import { erstelleKommentarAutomation, erstelleLaufAufraeumAutomation } from './services/teamboard/kommentar-automation.js';
 import { TeamboardEinstellungenStore } from './core/teamboard-einstellungen.js';
 import { TeamboardErledigungenStore } from './core/teamboard-erledigungen.js';
 import { renderSeite } from './services/teamboard/seite.js';
@@ -104,6 +105,8 @@ const teamboardErledigenDienst = erstelleErledigenDienst({
   ladeBoard: teamboardBoardLader,
   cacheVerwerfen: teamboardBoardLader.verwerfen,
 });
+scheduler.register(erstelleKommentarAutomation(teamboardErledigenDienst));
+scheduler.register(erstelleLaufAufraeumAutomation(scheduler));
 
 // ─── Microsoft Graph (E-Mail-Polling + Mail-Versand) ─────────────
 // MS_MAILBOXES: kommagetrennte Liste der Postfächer, in denen die

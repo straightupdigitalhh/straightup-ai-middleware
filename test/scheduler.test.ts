@@ -140,4 +140,37 @@ describe('Scheduler', () => {
     await scheduler.trigger('liest-settings', 'manual').done;
     expect(seen).toEqual({ soll: 8 });
   });
+
+  it('loescheAlteLaeufe löscht Läufe älter als die Grenze, jüngere bleiben stehen', () => {
+    const db = openDb(':memory:');
+    const s1 = new Scheduler(db);
+    const TAG_MS = 24 * 60 * 60 * 1000;
+    const jetzt = new Date('2026-08-27T12:00:00.000Z');
+    const alt = new Date(jetzt.getTime() - 31 * TAG_MS).toISOString();
+    const juenger = new Date(jetzt.getTime() - 29 * TAG_MS).toISOString();
+    db.prepare(
+      `INSERT INTO automation_runs (automation_id, trigger, status, started_at) VALUES ('demo', 'schedule', 'ok', ?)`,
+    ).run(alt);
+    db.prepare(
+      `INSERT INTO automation_runs (automation_id, trigger, status, started_at) VALUES ('demo', 'schedule', 'ok', ?)`,
+    ).run(juenger);
+
+    const geloescht = s1.loescheAlteLaeufe(30, jetzt);
+
+    expect(geloescht).toBe(1);
+    const rows = db.prepare('SELECT started_at FROM automation_runs ORDER BY id').all() as { started_at: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].started_at).toBe(juenger);
+  });
+
+  it('loescheAlteLaeufe verwendet ohne jetzt-Parameter die aktuelle Zeit', () => {
+    const db = openDb(':memory:');
+    const s1 = new Scheduler(db);
+    const weitWeg = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare(
+      `INSERT INTO automation_runs (automation_id, trigger, status, started_at) VALUES ('demo', 'schedule', 'ok', ?)`,
+    ).run(weitWeg);
+
+    expect(s1.loescheAlteLaeufe(30)).toBe(1);
+  });
 });

@@ -238,6 +238,18 @@ export class Scheduler {
     return rows.map(toRun);
   }
 
+  /**
+   * Löscht Lauf-Protokolle, deren Start länger als `aelterAlsTage` zurückliegt.
+   * Ohne dieses Aufräumen wüchse automation_runs unbegrenzt, sobald eine
+   * Automation minütlich läuft (jeder Lauf legt eine Zeile an, `trigger`).
+   * Gibt die Zahl gelöschter Zeilen zurück.
+   */
+  loescheAlteLaeufe(aelterAlsTage: number, jetzt?: Date): number {
+    const grenze = new Date((jetzt ?? new Date()).getTime() - aelterAlsTage * 24 * 60 * 60 * 1000);
+    const result = this.db.prepare('DELETE FROM automation_runs WHERE started_at <= ?').run(grenze.toISOString());
+    return Number(result.changes);
+  }
+
   statusOf(id: string): AutomationStatus {
     const def = this.definitions.get(id);
     if (!def) throw new Error(`Automation "${id}" ist nicht registriert`);
