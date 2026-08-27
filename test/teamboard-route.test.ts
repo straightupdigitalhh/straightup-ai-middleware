@@ -126,6 +126,13 @@ describe('GET /api/teamboard/board', () => {
     expect(res.body.betrachter).toEqual({ aworkUserId: null, istAdmin: false });
   });
 
+  it('setzt Cache-Control: private, no-store — die Antwort trägt seit Task 8 Nutzeridentität und darf in keinem gemeinsamen Cache landen (M1)', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, memberAuth('u-lea'))).get('/api/teamboard/board');
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('private, no-store');
+  });
+
   it('werfender ladeBoard ⇒ 502 mit clientErrorMessage-Body, kein Stacktrace', async () => {
     const deps = makeDeps({ ladeBoard: vi.fn().mockRejectedValue(new Error('awork API 500: geheimer Pfad /interna')) });
     const res = await request(makeApp(deps, apiKeyAuth)).get('/api/teamboard/board');

@@ -95,6 +95,10 @@ function parseEinstellungen(body: unknown): TeamboardEinstellungen | null {
 // nutzerabhängig an — nach dem Muster von /zeiten. Der Master-Key
 // (via 'api-key') hat keine Identität: dort bleibt es bei null, der Client
 // zeigt dann keinen Erledigt-Knopf.
+// Die ANTWORT der Route ist damit seit Task 8 personenbezogen, auch wenn es
+// der Cache-Inhalt nicht ist — sie darf in keinem gemeinsamen Cache landen
+// (siehe Cache-Control in /board, gleiche Begründung wie bei der
+// Avatar-Route).
 
 function betrachterAus(auth: AuthContext | undefined): Betrachter | null {
   if (!auth || auth.via !== 'session' || !auth.user) return null;
@@ -195,7 +199,12 @@ export function createTeamboardRouter(deps: Deps): Router {
   router.get('/api/teamboard/board', async (_req: Request, res: Response) => {
     try {
       const stand = await deps.ladeBoard();
-      res.json({ ...stand, betrachter: betrachterAus(getAuth(res)) });
+      // private: die Antwort trägt mit betrachter die Identität des
+      // Aufrufers. no-store zusätzlich, weil sich der Board-Stand alle 10 s
+      // ändert und der Client ohnehin in diesem Takt neu fragt.
+      res
+        .set('Cache-Control', 'private, no-store')
+        .json({ ...stand, betrachter: betrachterAus(getAuth(res)) });
     } catch (e: any) {
       console.error(`❌ teamboard: Board laden fehlgeschlagen: ${e?.message ?? e}`);
       res.status(502).json({ error: 'awork_unreachable', message: clientErrorMessage(e) });
