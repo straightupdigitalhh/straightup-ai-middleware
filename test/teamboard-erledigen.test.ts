@@ -362,6 +362,63 @@ describe("erstelleErledigenDienst", () => {
     expect(awork.getTaskStatuses).toHaveBeenCalledTimes(2);
   });
 
+  it("(g2) verwirft die gemerkte done-Status-ID, wenn changeTaskStatus wirft — sonst zeigte der Cache bis zum Neustart auf eine tote ID (I3)", async () => {
+    const nutzer = neuerNutzer();
+    const { awork } = fakeAwork({
+      aufgaben: {
+        "task-1": aworkAufgabe("task-1"),
+        "task-2": aworkAufgabe("task-2"),
+        "task-3": aworkAufgabe("task-3"),
+      },
+    });
+    const { dienst } = baueDienst({
+      awork,
+      karten: [karte("task-1", ["aw-lea"]), karte("task-2", ["aw-lea"]), karte("task-3", ["aw-lea"])],
+    });
+    const erledige = (taskId: string) =>
+      dienst.erledige({ taskId, userId: nutzer.id, aworkUserId: "aw-lea", istAdmin: false });
+
+    expect((await erledige("task-1")).ok).toBe(true);
+    expect(awork.getTaskStatuses).toHaveBeenCalledTimes(1);
+
+    // Die Erledigt-Spalte wurde in awork gelöscht und neu angelegt: der
+    // Wechsel auf die gemerkte ID scheitert.
+    awork.changeTaskStatus.mockRejectedValueOnce(new Error("awork API 400 Bad Request"));
+    await expect(erledige("task-2")).rejects.toThrow(/400/);
+
+    // Der nächste Klick im selben Projekt löst neu auf statt erneut in
+    // denselben Fehler zu laufen.
+    expect((await erledige("task-3")).ok).toBe(true);
+    expect(awork.getTaskStatuses).toHaveBeenCalledTimes(2);
+  });
+
+  it("(g3) verwirft die gemerkte done-Status-ID auch im Fall nicht_gewechselt (I3)", async () => {
+    const nutzer = neuerNutzer();
+    const { awork, zustand } = fakeAwork({
+      aufgaben: {
+        "task-1": aworkAufgabe("task-1"),
+        "task-2": aworkAufgabe("task-2"),
+        "task-3": aworkAufgabe("task-3"),
+      },
+    });
+    const { dienst } = baueDienst({
+      awork,
+      karten: [karte("task-1", ["aw-lea"]), karte("task-2", ["aw-lea"]), karte("task-3", ["aw-lea"])],
+    });
+    const erledige = (taskId: string) =>
+      dienst.erledige({ taskId, userId: nutzer.id, aworkUserId: "aw-lea", istAdmin: false });
+
+    expect((await erledige("task-1")).ok).toBe(true);
+    expect(awork.getTaskStatuses).toHaveBeenCalledTimes(1);
+
+    zustand.wechselWirkt = false;
+    expect(await erledige("task-2")).toEqual({ ok: false, fehler: "nicht_gewechselt" });
+
+    zustand.wechselWirkt = true;
+    expect((await erledige("task-3")).ok).toBe(true);
+    expect(awork.getTaskStatuses).toHaveBeenCalledTimes(2);
+  });
+
   it("(j) nimmt Status-ID, Namen und Projekt aus getTask — nie aus der (bis zu 60s alten) Board-Karte", async () => {
     const nutzer = neuerNutzer();
     // Die Karte ist in JEDEM Feld veraltet, das in den Schreibpfad passt:

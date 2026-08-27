@@ -81,6 +81,13 @@ export function erstelleErledigenDienst(opts: {
    * einen zusätzlichen API-Gang pro Klick. Gescheiterte Auflösungen kommen
    * NICHT hinein — sonst bliebe ein nachträglich angelegter done-Status für
    * die Laufzeit des Prozesses unsichtbar.
+   *
+   * „Praktisch nie" ist kein „nie": wird die Erledigt-Spalte eines Projekts
+   * in awork gelöscht und neu angelegt, zeigt der Eintrag auf eine tote
+   * Status-ID. Darum verwirft der Schreibpfad den Eintrag dieses Projekts,
+   * sobald der Wechsel scheitert (Ausnahme aus changeTaskStatus oder
+   * nicht_gewechselt) — ohne das liefe jeder weitere Klick in diesem Projekt
+   * bis zum Neustart der Middleware in denselben 502.
    */
   const doneStatusCache = new Map<string, string>();
 
@@ -169,7 +176,12 @@ export function erstelleErledigenDienst(opts: {
 
     // 5. Schreiben und nachlesen: changeTaskStatus antwortet 204 mit leerem
     //    Body — ein ausbleibender Fehler beweist den Wechsel NICHT.
-    await opts.awork.changeTaskStatus(a.taskId, doneStatusId);
+    try {
+      await opts.awork.changeTaskStatus(a.taskId, doneStatusId);
+    } catch (fehler) {
+      doneStatusCache.delete(vorher.projectId);
+      throw fehler;
+    }
     let nachlese = await leseNach(a.taskId);
     if (!nachlese.gescheitert && nachlese.aufgabe?.taskStatus?.type !== "done") {
       // Der Wechsel kann angenommen und trotzdem noch nicht sichtbar sein:
@@ -183,7 +195,8 @@ export function erstelleErledigenDienst(opts: {
     }
     if (!nachlese.gescheitert && nachlese.aufgabe?.taskStatus?.type !== "done") {
       // Auch der zweite Blick zeigt kein done — awork hat den Wechsel wirklich
-      // nicht übernommen.
+      // nicht übernommen. Eine tote done-Status-ID ist ein möglicher Grund.
+      doneStatusCache.delete(vorher.projectId);
       return { ok: false, fehler: "nicht_gewechselt" };
     }
 
