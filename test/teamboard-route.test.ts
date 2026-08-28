@@ -8,7 +8,7 @@ import { openDb } from '../src/core/db.js';
 import { UserStore } from '../src/core/users.js';
 import { SessionStore } from '../src/core/sessions.js';
 import { createAuthRouter } from '../src/routes/auth.js';
-import { TeamboardEinstellungenStore } from '../src/core/teamboard-einstellungen.js';
+import { TeamboardEinstellungenStore, LEERER_FILTER } from '../src/core/teamboard-einstellungen.js';
 import type { ZeitenProNutzer } from '../src/services/teamboard/zeiten.js';
 import { UNDO_FENSTER_MS } from '../src/core/teamboard-erledigungen.js';
 import type { ErledigenFehler, RueckgaengigFehler } from '../src/services/teamboard/erledigen.js';
@@ -28,16 +28,72 @@ const boardStandFixture = {
   alterSekunden: 0,
 };
 
+/** Board mit je einem Projekt an einer Karte und an einem Timer (Filterleiste). */
+const boardMitProjektenFixture = {
+  board: {
+    stand: '2026-08-28T10:00:00.000Z',
+    lanes: [
+      {
+        userId: 'u-lea',
+        name: 'Lea Stöber',
+        timer: null,
+        aufgaben: [
+          {
+            id: 't-1',
+            name: 'Aufgabe',
+            kennung: null,
+            projektName: 'Kunde X',
+            projektId: 'proj-karte',
+            statusName: 'Offen',
+            statusTyp: 'todo',
+            faelligAm: null,
+            istPrio: false,
+            istWiederkehrend: false,
+            arbeitsart: 'Projektarbeit',
+            assigneeIds: ['u-lea'],
+            ueberfaellig: false,
+          },
+        ],
+      },
+      {
+        userId: 'u-max',
+        name: 'Max Mendel',
+        timer: {
+          aufgabenName: 'Timer-Aufgabe',
+          aufgabenKennung: null,
+          projektName: 'Kunde Y',
+          projektId: 'proj-timer',
+          sekunden: 60,
+          pausiert: false,
+        },
+        aufgaben: [],
+      },
+    ],
+  },
+  alterSekunden: 0,
+};
+
+const alleProjekteFixture = {
+  'proj-karte': { art: 'Website-Support', status: 'progress' },
+  'proj-timer': { art: 'Website-Erstellung', status: 'closed' },
+  'proj-nie-im-board': { art: 'Vorlagen', status: 'not-started' },
+};
+
 const zeitenFixture: ZeitenProNutzer = {
   'u-lea': { heuteSekunden: 100, vortagSekunden: 200, wocheSekunden: 300 },
   'u-max': { heuteSekunden: 400, vortagSekunden: 500, wocheSekunden: 600 },
 };
 
+type Einstellungen = Parameters<TeamboardEinstellungenStore['set']>[1];
+
 function fakeEinstellungenStore() {
-  const data = new Map<string, { reihenfolge: string[] | null; ausgeblendet: string[] }>();
+  const data = new Map<string, Einstellungen>();
   return {
-    get: vi.fn((userId: string) => data.get(userId) ?? { reihenfolge: null, ausgeblendet: [] }),
-    set: vi.fn((userId: string, e: { reihenfolge: string[] | null; ausgeblendet: string[] }) => {
+    get: vi.fn(
+      (userId: string) =>
+        data.get(userId) ?? { reihenfolge: null, ausgeblendet: [], filter: { ...LEERER_FILTER } },
+    ),
+    set: vi.fn((userId: string, e: Einstellungen) => {
       data.set(userId, e);
     }),
   };
@@ -62,6 +118,7 @@ function makeDeps(overrides: Partial<Parameters<typeof createTeamboardRouter>[0]
   return {
     ladeBoard: vi.fn().mockResolvedValue(boardStandFixture),
     ladeZeiten: vi.fn().mockResolvedValue(zeitenFixture),
+    ladeProjekte: vi.fn().mockResolvedValue({}),
     ladeNutzerBild: vi.fn().mockResolvedValue(null),
     einstellungen: fakeEinstellungenStore(),
     erledigenDienst: fakeErledigenDienst(),
@@ -99,14 +156,16 @@ describe('GET /api/teamboard/board', () => {
     const deps = makeDeps();
     const res = await request(makeApp(deps, apiKeyAuth)).get('/api/teamboard/board');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ...boardStandFixture, betrachter: null });
+    // projekte kommt seit der Filterleiste dazu — hier leer, weil die Lanes
+    // der Fixture keine Projekte tragen.
+    expect(res.body).toEqual({ ...boardStandFixture, betrachter: null, projekte: {} });
   });
 
   it('via session ⇒ 200 + BoardStand-JSON samt Betrachter', async () => {
     const deps = makeDeps();
     const res = await request(makeApp(deps, adminSession)).get('/api/teamboard/board');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ...boardStandFixture, betrachter: { aworkUserId: null, istAdmin: true } });
+    expect(res.body).toEqual({ ...boardStandFixture, betrachter: { aworkUserId: null, istAdmin: true }, projekte: {} });
   });
 
   // Der Board-Cache ist für alle Betrachter derselbe (BoardStand trägt keine
@@ -131,6 +190,36 @@ describe('GET /api/teamboard/board', () => {
     const res = await request(makeApp(deps, memberAuth('u-lea'))).get('/api/teamboard/board');
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('private, no-store');
+  });
+
+  // ─── Projekt-Stammdaten in der Board-Antwort (Filterleiste) ──────
+
+  it('hängt projekte an — aber NUR die Projekte, die im Board vorkommen (Karten und Timer)', async () => {
+    const deps = makeDeps({
+      ladeBoard: vi.fn().mockResolvedValue(boardMitProjektenFixture),
+      ladeProjekte: vi.fn().mockResolvedValue(alleProjekteFixture),
+    });
+    const res = await request(makeApp(deps, adminSession)).get('/api/teamboard/board');
+    expect(res.status).toBe(200);
+    // proj-nie-im-board steht in den Stammdaten, aber auf keiner Karte und
+    // in keinem Timer — die Antwort geht alle 10 s über die Leitung.
+    expect(res.body.projekte).toEqual({
+      'proj-karte': { art: 'Website-Support', status: 'progress' },
+      'proj-timer': { art: 'Website-Erstellung', status: 'closed' },
+    });
+  });
+
+  it('liefert das Board auch dann aus, wenn die Projekt-Stammdaten nicht zu holen sind — projekte ist dann leer', async () => {
+    const deps = makeDeps({
+      ladeBoard: vi.fn().mockResolvedValue(boardMitProjektenFixture),
+      ladeProjekte: vi.fn().mockRejectedValue(new Error('awork API 500 bei projects')),
+    });
+    const res = await request(makeApp(deps, adminSession)).get('/api/teamboard/board');
+    // Die Filterleiste ist Komfort — sie darf die Board-Auslieferung nie
+    // blockieren (der Lader liefert sonst von sich aus den letzten Stand).
+    expect(res.status).toBe(200);
+    expect(res.body.board).toEqual(boardMitProjektenFixture.board);
+    expect(res.body.projekte).toEqual({});
   });
 
   it('werfender ladeBoard ⇒ 502 mit clientErrorMessage-Body, kein Stacktrace', async () => {
@@ -229,18 +318,102 @@ describe('GET/PUT /api/teamboard/einstellungen', () => {
     expect(res.status).toBe(403);
   });
 
+  const vollerFilter = {
+    projektArten: ['Website-Support', 'Vorlagen'],
+    projekt: uuidA,
+    faelligkeit: ['ueberfaellig', 'heute'],
+    status: ['todo', 'progress'],
+    arbeitsarten: ['Projektarbeit'],
+    nurPrio: true,
+    nurLaufendeProjekte: true,
+  };
+
   it('Session-Roundtrip: PUT dann GET liefert denselben Stand', async () => {
     const deps = makeDeps();
     const app = makeApp(deps, adminSession);
     const put = await request(app)
       .put('/api/teamboard/einstellungen')
-      .send({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC] });
+      .send({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC], filter: vollerFilter });
     expect(put.status).toBe(200);
-    expect(put.body).toEqual({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC] });
+    expect(put.body).toEqual({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC], filter: vollerFilter });
 
     const get = await request(app).get('/api/teamboard/einstellungen');
     expect(get.status).toBe(200);
-    expect(get.body).toEqual({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC] });
+    expect(get.body).toEqual({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC], filter: vollerFilter });
+  });
+
+  // ── Filter-Feld: Abwärtskompatibilität und Validierung ──────────
+
+  it('PUT ohne filter-Feld ⇒ 200 mit leerem Filter — ein Client von vor der Filterleiste darf nicht scheitern', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, adminSession))
+      .put('/api/teamboard/einstellungen')
+      .send({ reihenfolge: null, ausgeblendet: [uuidC] });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ reihenfolge: null, ausgeblendet: [uuidC], filter: LEERER_FILTER });
+    expect(deps.einstellungen.set).toHaveBeenCalledWith('admin-1', {
+      reihenfolge: null,
+      ausgeblendet: [uuidC],
+      filter: LEERER_FILTER,
+    });
+  });
+
+  it('PUT ohne filter-Feld lässt einen bereits gespeicherten Filter STEHEN — ein Alt-Tab darf ihn nicht löschen', async () => {
+    // Realer Fall: über den Deploy hinweg offener Tab im alten Format
+    // schickt wegen Drag-and-drop oder Ausblenden ein PUT und hätte damit
+    // den in einem anderen Tab gesetzten Filter gelöscht.
+    const deps = makeDeps();
+    const app = makeApp(deps, adminSession);
+    await request(app)
+      .put('/api/teamboard/einstellungen')
+      .send({ reihenfolge: null, ausgeblendet: [], filter: vollerFilter });
+
+    const altTab = await request(app)
+      .put('/api/teamboard/einstellungen')
+      .send({ reihenfolge: [uuidA], ausgeblendet: [uuidC] });
+
+    expect(altTab.status).toBe(200);
+    expect(altTab.body).toEqual({ reihenfolge: [uuidA], ausgeblendet: [uuidC], filter: vollerFilter });
+    const get = await request(app).get('/api/teamboard/einstellungen');
+    expect(get.body.filter).toEqual(vollerFilter);
+  });
+
+  it('PUT ⇒ 400, wenn filter kein Objekt ist', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, adminSession))
+      .put('/api/teamboard/einstellungen')
+      .send({ reihenfolge: null, ausgeblendet: [], filter: 'nur-prio' });
+    expect(res.status).toBe(400);
+    expect(deps.einstellungen.set).not.toHaveBeenCalled();
+  });
+
+  it('PUT ⇒ 400 bei falschen Feldtypen im Filter (Liste statt Boolean, Zahl statt Liste)', async () => {
+    const deps = makeDeps();
+    for (const kaputt of [
+      { ...vollerFilter, nurPrio: ['ja'] },
+      { ...vollerFilter, projektArten: 3 },
+      { ...vollerFilter, projekt: 42 },
+      { ...vollerFilter, status: [7] },
+    ]) {
+      const res = await request(makeApp(deps, adminSession))
+        .put('/api/teamboard/einstellungen')
+        .send({ reihenfolge: null, ausgeblendet: [], filter: kaputt });
+      expect(res.status).toBe(400);
+    }
+    expect(deps.einstellungen.set).not.toHaveBeenCalled();
+  });
+
+  it('PUT ⇒ 400 bei mehr als 100 Filter-Werten oder überlangem Einzelwert (Speicher-Obergrenze wie bei den ID-Listen)', async () => {
+    const deps = makeDeps();
+    const zuViele = { ...vollerFilter, projektArten: Array.from({ length: 101 }, (_, i) => `Art ${i}`) };
+    const zuLang = { ...vollerFilter, arbeitsarten: ['x'.repeat(201)] };
+    for (const kaputt of [zuViele, zuLang]) {
+      const res = await request(makeApp(deps, adminSession))
+        .put('/api/teamboard/einstellungen')
+        .send({ reihenfolge: null, ausgeblendet: [], filter: kaputt });
+      expect(res.status).toBe(400);
+    }
+    expect(deps.einstellungen.set).not.toHaveBeenCalled();
   });
 
   it('PUT ⇒ 400 wenn reihenfolge kein Array ist', async () => {

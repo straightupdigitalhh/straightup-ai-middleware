@@ -64,6 +64,7 @@ function aufgabe(teile: Partial<OffeneAufgabe>): OffeneAufgabe {
     faelligAm: null,
     istPrio: false,
     istWiederkehrend: false,
+    arbeitsart: null,
     assigneeIds: [],
     ...teile,
   };
@@ -134,6 +135,21 @@ describe("baueBoard", () => {
     });
     expect(board.lanes.find((l) => l.userId === "u-lea")!.aufgaben).toHaveLength(1);
     expect(board.lanes.find((l) => l.userId === "u-jan")!.aufgaben).toHaveLength(1);
+  });
+
+  it("gibt die Arbeitsart an die Karte weiter — der Filter liest sie später aus den Karten des Boards", () => {
+    const board = baueBoard({
+      nutzer,
+      timer: [],
+      aufgaben: [
+        aufgabe({ id: "t-arbeit", assigneeIds: ["u-lea"], arbeitsart: "Interne Arbeit" }),
+        aufgabe({ id: "t-ohne", assigneeIds: ["u-gabi"], arbeitsart: null }),
+      ],
+      jetzt,
+      heute,
+    });
+    expect(board.lanes.find((l) => l.userId === "u-lea")!.aufgaben[0].arbeitsart).toBe("Interne Arbeit");
+    expect(board.lanes.find((l) => l.userId === "u-gabi")!.aufgaben[0].arbeitsart).toBeNull();
   });
 
   it("gibt istWiederkehrend und assigneeIds an der Karte weiter — auch identisch in beiden Lanes bei mehreren Zuständigen", () => {

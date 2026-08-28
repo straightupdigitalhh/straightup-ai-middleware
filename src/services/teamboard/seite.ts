@@ -1,5 +1,7 @@
 import type { BoardStand } from "./daten.js";
 import type { AufgabenKarte, Board, Lane } from "./board.js";
+import type { ProjekteProId } from "./projekte.js";
+import type { TeamboardFilter } from "../../core/teamboard-einstellungen.js";
 
 /**
  * Reine Client-Funktionen (P1): als exportierte TS-Funktionen definiert,
@@ -112,21 +114,266 @@ export function projekteAusBoard(board: Board): { id: string; name: string }[] {
 }
 
 /**
- * Wendet den Projekt-Filter auf die Lanes an (Task 9): projektId null lässt
- * die Lanes unverändert (dieselbe Referenz zurück). Sonst bleibt eine Lane
- * nur, wenn ihr Timer im gewählten Projekt läuft ODER mindestens eine
- * Aufgabe darin liegt; die Aufgabenliste wird auf das Projekt gefiltert, die
- * Timer-Karte nur behalten, wenn ihr eigenes Projekt zum Filter passt (sonst
- * timer: null — ein Timer in einem fremden Projekt verschwindet auch dann,
- * wenn die Lane wegen einer passenden Aufgabe bleibt).
+ * Projekt-Arten der im Board vorkommenden Projekte, mit der ANZAHL DER
+ * PROJEKTE je Art (nicht der Karten) — das füllt das Projekt-Art-Panel der
+ * Filterleiste. Grundlage ist projekteAusBoard, damit dieselbe Projektliste
+ * zählt wie im Projekt-Panel daneben. Projekte ohne Art bleiben draußen: es
+ * gibt für sie keinen Panel-Eintrag, also auch nichts zu zählen.
+ *
+ * Der Zähler ist ein prototypenloses Objekt: Art-Namen sind frei getippte
+ * awork-Daten, und eine Art namens "__proto__" würde auf einem gewöhnlichen
+ * Objektliteral lautlos verschluckt.
  */
-export function wendeProjektFilterAn(lanes: Lane[], projektId: string | null): Lane[] {
-  if (projektId === null) return lanes;
+export function projektArtenAusBoard(
+  board: Board,
+  projekte: Record<string, { art: string | null; status: string | null }>
+): { wert: string; anzahl: number }[] {
+  var zaehler: Record<string, number> = Object.create(null);
+  projekteAusBoard(board).forEach(function (p) {
+    var info = Object.prototype.hasOwnProperty.call(projekte, p.id) ? projekte[p.id] : null;
+    if (info === null || info.art === null) return;
+    zaehler[info.art] = (zaehler[info.art] || 0) + 1;
+  });
+  var liste: { wert: string; anzahl: number }[] = [];
+  for (var art in zaehler) {
+    liste.push({ wert: art, anzahl: zaehler[art] });
+  }
+  liste.sort(function (a, b) {
+    return a.wert.localeCompare(b.wert, "de");
+  });
+  return liste;
+}
+
+/**
+ * Distinct-Arbeitsarten aus allen Karten des Boards, alphabetisch (de) —
+ * die Werte des Arbeitsart-Panels. Karten ohne Arbeitsart bleiben draußen.
+ * Timer tragen keine Arbeitsart und kommen deshalb hier nicht vor.
+ */
+export function arbeitsartenAusBoard(board: Board): string[] {
+  var gesehen: Record<string, boolean> = Object.create(null);
+  var liste: string[] = [];
+  board.lanes.forEach(function (lane) {
+    lane.aufgaben.forEach(function (a) {
+      if (a.arbeitsart === null || gesehen[a.arbeitsart]) return;
+      gesehen[a.arbeitsart] = true;
+      liste.push(a.arbeitsart);
+    });
+  });
+  liste.sort(function (a, b) {
+    return a.localeCompare(b, "de");
+  });
+  return liste;
+}
+
+/**
+ * "Kein Filter aktiv" — Startwert im Client und Rückfallebene, wenn die
+ * gespeicherten Einstellungen (noch) kein filter-Feld tragen. Als Funktion
+ * statt als Konstante, damit jeder Aufrufer eigene Listen bekommt: eine
+ * geteilte Konstante würde beim ersten Anklicken einer Checkbox zur
+ * gemeinsamen Arbeitskopie.
+ */
+export function standardFilter(): TeamboardFilter {
+  return {
+    projektArten: [],
+    projekt: null,
+    faelligkeit: [],
+    status: [],
+    arbeitsarten: [],
+    nurPrio: false,
+    nurLaufendeProjekte: false,
+  };
+}
+
+/**
+ * Der Berliner Kalendertag des Board-Stands als "YYYY-MM-DD". Bewusst aus
+ * stand.board.stand statt aus der Uhr des Betrachters: der Server hat mit
+ * genau diesem Zeitpunkt die ueberfaellig-Flags gesetzt (daten.ts,
+ * heuteBerlin) — würde der Client "heute" selbst aus seiner Systemuhr
+ * bilden, könnten die Dimensionen "überfällig" und "heute" auf einem
+ * falsch gestellten oder in einer anderen Zeitzone laufenden Rechner
+ * auseinanderfallen. sv-SE formatiert genau als YYYY-MM-DD (dieselbe
+ * Mechanik wie heuteBerlin serverseitig).
+ */
+export function heuteAusStand(standIso: string): string {
+  var d = new Date(standIso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Berlin",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/**
+ * Sonntag der Woche zu "YYYY-MM-DD" — die obere Grenze der Dimension
+ * "diese Woche". Mo–So wie wochenstart() in zeiten.ts; Mittagszeit als
+ * Uhrzeit, damit keine Sommerzeit-Grenze den Tag kippt.
+ */
+export function sonntagDerWoche(tag: string): string {
+  var d = new Date(tag + "T12:00:00Z");
+  if (Number.isNaN(d.getTime())) return "";
+  var wochentag = d.getUTCDay(); // 0=So, 1=Mo, …, 6=Sa
+  d.setUTCDate(d.getUTCDate() + (wochentag === 0 ? 0 : 7 - wochentag));
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Ist überhaupt eine Dimension gesetzt? Entscheidet zweierlei an genau
+ * einer Stelle: ob wendeFilterAn die Lanes unverändert durchreicht und ob
+ * die Leiste den Knopf "alle Filter zurücksetzen" zeigt (ohne aktiven
+ * Filter wäre er ein toter Knopf).
+ */
+export function istFilterAktiv(filter: TeamboardFilter): boolean {
+  return (
+    filter.projektArten.length > 0 ||
+    filter.projekt !== null ||
+    filter.faelligkeit.length > 0 ||
+    filter.status.length > 0 ||
+    filter.arbeitsarten.length > 0 ||
+    filter.nurPrio ||
+    filter.nurLaufendeProjekte
+  );
+}
+
+/**
+ * Der tatsächlich angewandte Filter. Sind die Projekt-Stammdaten LEER,
+ * verhalten sich die zwei stammdatenabhängigen Dimensionen (Projekt-Art,
+ * "nur laufende Projekte") neutral; die übrigen fünf bleiben unberührt.
+ *
+ * Warum fail-open: die Stammdaten kommen aus einem eigenen awork-Endpunkt
+ * mit eigenem Cache und eigenem Fehler-Backoff (services/teamboard/
+ * projekte.ts). Hakt der nach einem Prozess-Neustart, liegt ein
+ * vollständiges Board vor, aber eine leere Projekt-Karte — und ein
+ * GESPEICHERTER Art-Filter würde dann jede Karte und jeden Timer wegwerfen.
+ * Der Wandmonitor zeigte je Backoff-Runde fünf Minuten leere Fläche,
+ * obwohl die Board-Daten vollständig da sind. Ein ungefiltertes Board ist
+ * ein wahres Board, ein leeres ein falsches.
+ *
+ * Bewusst NUR bei komplett leeren Stammdaten: ein einzelnes unbekanntes
+ * Projekt (seit dem letzten Abruf neu angelegt) ist kein Ausfall — dort
+ * bleibt "kennt die Art nicht" die richtige Antwort. Der Einzelprojekt-
+ * Filter braucht ohnehin keine Stammdaten und bleibt in jedem Fall aktiv.
+ *
+ * Sind Stammdaten da, kommt DERSELBE Filter zurück (keine Kopie) — die
+ * Funktion läuft einmal je zeichne(), nicht je Karte.
+ */
+export function wirksamerFilter(
+  filter: TeamboardFilter,
+  projekte: Record<string, { art: string | null; status: string | null }>
+): TeamboardFilter {
+  for (var id in projekte) {
+    if (Object.prototype.hasOwnProperty.call(projekte, id)) return filter;
+  }
+  return {
+    projektArten: [],
+    projekt: filter.projekt,
+    faelligkeit: filter.faelligkeit,
+    status: filter.status,
+    arbeitsarten: filter.arbeitsarten,
+    nurPrio: filter.nurPrio,
+    nurLaufendeProjekte: false,
+  };
+}
+
+/**
+ * Der projektbezogene Teil des Filters (Projekt, Projekt-Art, nur laufende
+ * Projekte) — das Einzige, was auch eine TIMER-Karte beantworten kann.
+ * Kennen die Stammdaten das Projekt nicht (neu angelegt, awork-Ausfall),
+ * gilt es als "ohne Art, ohne Status": der Einzelprojekt-Filter arbeitet
+ * trotzdem, weil er nur die ID an der Karte braucht.
+ */
+export function projektPasst(
+  projektId: string | null,
+  projekte: Record<string, { art: string | null; status: string | null }>,
+  filter: TeamboardFilter
+): boolean {
+  if (filter.projekt !== null && projektId !== filter.projekt) return false;
+  var info =
+    projektId !== null && Object.prototype.hasOwnProperty.call(projekte, projektId)
+      ? projekte[projektId]
+      : null;
+  if (filter.projektArten.length > 0) {
+    if (info === null || info.art === null) return false;
+    if (filter.projektArten.indexOf(info.art) === -1) return false;
+  }
+  if (filter.nurLaufendeProjekte && (info === null || info.status !== "progress")) return false;
+  return true;
+}
+
+/**
+ * Der aufgabenbezogene Teil des Filters (Prio, Status, Arbeitsart,
+ * Fälligkeit). Innerhalb der Fälligkeit gilt ODER: gewählt sind Töpfe, kein
+ * Zeitraum. "diese Woche" reicht von HEUTE bis einschließlich Sonntag —
+ * wer sie wählt, will sehen, was noch ansteht; der Rückstand hat mit
+ * "überfällig" seine eigene Option, und beides zusammen lässt sich
+ * weiterhin ausdrücklich wählen.
+ */
+export function aufgabePasst(
+  a: AufgabenKarte,
+  filter: TeamboardFilter,
+  heute: string,
+  sonntag: string
+): boolean {
+  if (filter.nurPrio && !a.istPrio) return false;
+  if (filter.status.length > 0 && filter.status.indexOf(a.statusTyp) === -1) return false;
+  if (filter.arbeitsarten.length > 0) {
+    if (a.arbeitsart === null) return false;
+    if (filter.arbeitsarten.indexOf(a.arbeitsart) === -1) return false;
+  }
+  if (filter.faelligkeit.length > 0) {
+    var tag = a.faelligAm === null ? null : a.faelligAm.slice(0, 10);
+    var treffer = false;
+    if (filter.faelligkeit.indexOf("ueberfaellig") !== -1 && a.ueberfaellig) treffer = true;
+    if (filter.faelligkeit.indexOf("heute") !== -1 && tag === heute) treffer = true;
+    if (filter.faelligkeit.indexOf("woche") !== -1 && tag !== null && tag >= heute && tag <= sonntag) treffer = true;
+    if (filter.faelligkeit.indexOf("ohneTermin") !== -1 && tag === null) treffer = true;
+    if (!treffer) return false;
+  }
+  return true;
+}
+
+/**
+ * Wendet die Filterleiste auf die Lanes an — die Verallgemeinerung des
+ * früheren wendeProjektFilterAn (Task 9), dessen Verhalten als Dimension
+ * "Projekt" unverändert erhalten bleibt. Ohne gesetzte Dimension kommen
+ * dieselben Lanes (dieselbe Referenz) zurück.
+ *
+ * Lane-Sichtbarkeit unverändert: eine Lane bleibt nur, wenn ihr Timer passt
+ * ODER mindestens eine Aufgabe übrig bleibt; ein Timer, dessen eigenes
+ * Projekt nicht passt, verschwindet auch dann (timer: null), wenn die Lane
+ * wegen einer passenden Aufgabe bleibt.
+ *
+ * Die Timer-Karte wird NUR an den Dimensionen gemessen, die sie beantworten
+ * kann (Projekt, Projekt-Art, laufende Projekte). Sie trägt weder Status
+ * noch Fälligkeit, Prio oder Arbeitsart — würden diese Dimensionen auch auf
+ * sie angewendet, ließe jeder Klick auf "nur Prio" sämtliche laufenden
+ * Timer verschwinden, und genau die beantworten die Frage, woran das Team
+ * gerade arbeitet.
+ *
+ * heute kommt von außen (heuteAusStand) statt aus einer Uhr im Inneren —
+ * sonst wäre die Funktion nicht rein und nicht deterministisch prüfbar.
+ *
+ * Fehlen die Projekt-Stammdaten ganz, wirken die zwei von ihnen abhängigen
+ * Dimensionen neutral (siehe wirksamerFilter).
+ */
+export function wendeFilterAn(
+  lanes: Lane[],
+  projekte: Record<string, { art: string | null; status: string | null }>,
+  filter: TeamboardFilter,
+  heute: string
+): Lane[] {
+  // Erst neutralisieren, dann prüfen, ob überhaupt noch etwas gesetzt ist:
+  // bleibt nach einem Stammdaten-Ausfall nichts übrig, kommen dieselben
+  // Lanes (dieselbe Referenz) zurück wie ohne Filter.
+  var wirksam = wirksamerFilter(filter, projekte);
+  if (!istFilterAktiv(wirksam)) return lanes;
+  var sonntag = sonntagDerWoche(heute);
   var ergebnis: Lane[] = [];
   lanes.forEach(function (lane) {
-    var timerPasst = lane.timer !== null && lane.timer.projektId === projektId;
+    var timerPasst = lane.timer !== null && projektPasst(lane.timer.projektId, projekte, wirksam);
     var gefilterteAufgaben = lane.aufgaben.filter(function (a) {
-      return a.projektId === projektId;
+      return projektPasst(a.projektId, projekte, wirksam) && aufgabePasst(a, wirksam, heute, sonntag);
     });
     if (!timerPasst && gefilterteAufgaben.length === 0) return;
     ergebnis.push({
@@ -141,7 +388,7 @@ export function wendeProjektFilterAn(lanes: Lane[], projektId: string | null): L
 
 /**
  * Wendet die persönlichen Einstellungen (Reihenfolge/Ausblenden) auf die
- * Lanes an (Task 10). Läuft in zeichne() VOR wendeProjektFilterAn.
+ * Lanes an (Task 10). Läuft in zeichne() VOR wendeFilterAn.
  *
  * reihenfolge === null ⇒ alphabetische Bestandsreihenfolge (nach lane.name,
  * "de"). Sonst bestimmen die gelisteten awork-User-IDs die Reihenfolge der
@@ -308,14 +555,23 @@ const FAVICON_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAMsAAADLCAYAAADA+2czAAAACXBIWXMAAAsTAAALEwEAmpwYAAAF6mlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSLvu78iIGlkPSJXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQiPz4gPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iQWRvYmUgWE1QIENvcmUgNi4wLWMwMDIgNzkuMTY0NDg4LCAyMDIwLzA3LzEwLTIyOjA2OjUzICAgICAgICAiPiA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPiA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIiB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iIHhtbG5zOnhtcE1NPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvbW0vIiB4bWxuczpzdFJlZj0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL3NUeXBlL1Jlc291cmNlUmVmIyIgeG1sbnM6c3RFdnQ9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZUV2ZW50IyIgeG1sbnM6ZGM9Imh0dHA6Ly9wdXJsLm9yZy9kYy9lbGVtZW50cy8xLjEvIiB4bWxuczpwaG90b3Nob3A9Imh0dHA6Ly9ucy5hZG9iZS5jb20vcGhvdG9zaG9wLzEuMC8iIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIDIyLjAgKFdpbmRvd3MpIiB4bXA6Q3JlYXRlRGF0ZT0iMjAyMC0xMi0wOVQwOTo0MzozMSswMTowMCIgeG1wOk1vZGlmeURhdGU9IjIwMjAtMTItMTFUMDk6NDk6MDErMDE6MDAiIHhtcDpNZXRhZGF0YURhdGU9IjIwMjAtMTItMTFUMDk6NDk6MDErMDE6MDAiIHhtcE1NOkluc3RhbmNlSUQ9InhtcC5paWQ6YzNmZjM0Y2EtNWY4ZC00NDJjLWI4YTMtMzU3NjAzZTJiY2VmIiB4bXBNTTpEb2N1bWVudElEPSJ4bXAuZGlkOjlEN0UxMzJFMzlGQTExRUI4RkRDOTQxMTdCMzdCNDk3IiB4bXBNTTpPcmlnaW5hbERvY3VtZW50SUQ9InhtcC5kaWQ6OUQ3RTEzMkUzOUZBMTFFQjhGREM5NDExN0IzN0I0OTciIGRjOmZvcm1hdD0iaW1hZ2UvcG5nIiBwaG90b3Nob3A6Q29sb3JNb2RlPSIzIiBwaG90b3Nob3A6SUNDUHJvZmlsZT0ic1JHQiBJRUM2MTk2Ni0yLjEiPiA8eG1wTU06RGVyaXZlZEZyb20gc3RSZWY6aW5zdGFuY2VJRD0ieG1wLmlpZDo5RDdFMTMyQjM5RkExMUVCOEZEQzk0MTE3QjM3QjQ5NyIgc3RSZWY6ZG9jdW1lbnRJRD0ieG1wLmRpZDo5RDdFMTMyQzM5RkExMUVCOEZEQzk0MTE3QjM3QjQ5NyIvPiA8eG1wTU06SGlzdG9yeT4gPHJkZjpTZXE+IDxyZGY6bGkgc3RFdnQ6YWN0aW9uPSJzYXZlZCIgc3RFdnQ6aW5zdGFuY2VJRD0ieG1wLmlpZDpjM2ZmMzRjYS01ZjhkLTQ0MmMtYjhhMy0zNTc2MDNlMmJjZWYiIHN0RXZ0OndoZW49IjIwMjAtMTItMTFUMDk6NDk6MDErMDE6MDAiIHN0RXZ0OnNvZnR3YXJlQWdlbnQ9IkFkb2JlIFBob3Rvc2hvcCAyMi4wIChNYWNpbnRvc2gpIiBzdEV2dDpjaGFuZ2VkPSIvIi8+IDwvcmRmOlNlcT4gPC94bXBNTTpIaXN0b3J5PiA8L3JkZjpEZXNjcmlwdGlvbj4gPC9yZGY6UkRGPiA8L3g6eG1wbWV0YT4gPD94cGFja2V0IGVuZD0iciI/PqOEYhQAAA8xSURBVHic7d0tf+RKdsfx3/UGZJA9r8A9LGwUtmy07LLpRUnQ1bCwOK9gO68gCkrY1kVZFpmF3TZbdttsWWQW2M1uWEBZ1z2aVuuhqnSqpPP9fPyZfpTO2P676uih9d379+9RQdwBGbB5/WruN899nLjcF6B+vX0Ajq/3z79UAN9pWJzdYUPQfG2AT1LFvHrGhuYA7HkLlXKgYRlvA+SvXxnTR4i5vfAWnv3rbTWChqXfHbDlLSD3cqV4dcKGpnr9t5YrJQ0alss22IAUpDNyuHrGhsago85F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";
 
 /**
- * Rendert das komplette HTML-Dokument. Nutzerdaten (Namen, Aufgabentitel)
- * stehen NUR im JSON-Datenblock — dort wird "<" zu <, damit ein
- * "</script>" in einem Aufgabennamen den Block nicht beenden kann. Das
- * Client-Skript baut alles mit createElement/textContent auf; es gibt
- * keinen Pfad, auf dem Daten als HTML interpretiert werden.
+ * Rendert das komplette HTML-Dokument. Nutzerdaten (Namen, Aufgabentitel,
+ * Projekt-Arten) stehen NUR im JSON-Datenblock — dort wird "<" escaped, damit ein
+ * "</script>" in einem Aufgabennamen ODER in einem Projekt-Art-Namen den
+ * Block nicht beenden kann. Das Client-Skript baut alles mit
+ * createElement/textContent auf; es gibt keinen Pfad, auf dem Daten als
+ * HTML interpretiert werden.
+ *
+ * projekte trägt Art und Status der im Board vorkommenden Projekte für die
+ * Filterleiste — dieselbe Form wie in der /board-Antwort, damit das
+ * Nachladen den eingebetteten Stand eins zu eins ersetzen kann.
  */
-export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): string {
-  const daten = JSON.stringify({ ...stand, betrachter }).replace(/</g, "\\u003c");
+export function renderSeite(
+  stand: BoardStand,
+  betrachter: Betrachter | null,
+  projekte: ProjekteProId
+): string {
+  const daten = JSON.stringify({ ...stand, betrachter, projekte }).replace(/</g, "\\u003c");
   return `<!doctype html>
 <html lang="de">
 <meta charset="utf-8">
@@ -352,9 +608,53 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
     border-left: 1px solid var(--linie); padding-left: 14px;
   }
   #stand { color: var(--gedeckt); font-size: 13px; }
-  #projekt-filter {
-    font: inherit; font-size: 13px; color: var(--tinte); background: var(--karte);
-    border: 1px solid var(--linie); border-radius: 6px; padding: 2px 6px;
+  /* ─── Filterleiste (F2, Mockup vom 28.08.2026) ───
+     Die Leiste ersetzt die frühere Projektfilter-Zeile im Kopfbereich. Ein
+     Aufklapp-Panel liegt absolut in seiner Gruppe (.fgruppe), deshalb dort
+     position: relative — ohne das säße jedes Panel am linken Rand der
+     ganzen Leiste. */
+  .filterbereich { padding: 10px 24px 0; }
+  .filterzeile {
+    position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 14px; background: var(--karte); border: 1px solid var(--linie); border-radius: 12px;
+  }
+  .fgruppe { position: relative; display: inline-flex; }
+  .fdrop {
+    display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--linie);
+    background: transparent; color: var(--tinte); font: inherit; font-size: 12.5px;
+    border-radius: 8px; padding: 4px 10px; cursor: pointer;
+  }
+  .fdrop .pfeil { color: var(--gedeckt); font-size: 10px; }
+  .fdrop .gewaehlt {
+    background: var(--aktiv-grund); color: var(--aktiv); border-radius: 99px;
+    padding: 0 7px; font-size: 11px; font-weight: 600;
+  }
+  .fpanel {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 250px;
+    background: var(--karte); border: 1px solid var(--linie); border-radius: 12px; padding: 8px;
+    box-shadow: 0 8px 26px color-mix(in srgb, var(--tinte) 14%, transparent);
+  }
+  .fpanel label {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px;
+    font-size: 13px; cursor: pointer;
+  }
+  .fpanel label:hover { background: color-mix(in srgb, var(--tinte) 5%, transparent); }
+  .fpanel .anzahl { margin-left: auto; color: var(--gedeckt); font-size: 11px; }
+  .fpanel .fkopf { padding: 2px 8px 6px; color: var(--gedeckt); font-size: 11px; }
+  .fpanel input { accent-color: var(--aktiv); }
+  .fchip {
+    border: 1px solid var(--linie); background: transparent; color: var(--tinte);
+    font: inherit; font-size: 12.5px; border-radius: 99px; padding: 3px 11px; cursor: pointer;
+  }
+  .aktivchip {
+    display: inline-flex; align-items: center; gap: 5px; background: var(--aktiv-grund);
+    color: var(--aktiv); font-size: 12px; font-weight: 600; border-radius: 99px; padding: 3px 6px 3px 11px;
+  }
+  .aktivchip b { font-weight: 400; color: color-mix(in srgb, var(--aktiv) 70%, var(--tinte)); }
+  .aktivchip .weg { border: 0; background: none; color: inherit; font: inherit; cursor: pointer; padding: 0 4px; }
+  .zuruecksetzen {
+    margin-left: auto; border: 0; background: none; color: var(--gedeckt);
+    font: inherit; font-size: 12.5px; cursor: pointer;
   }
   .chip-aufheben {
     border: 0; background: none; color: var(--gedeckt); font: inherit; font-size: 11px;
@@ -392,11 +692,20 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
   .lane { flex: 0 0 300px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
   @media (max-width: 480px) { .lane { flex-basis: 86vw; } }
 
-  /* ─── Kopfbox der Lane: Avatar, Name, Ausblenden, Instrumentenbrett ─── */
+  /* ─── Kopfbox der Lane: Avatar, Name, Ausblenden, Instrumentenbrett ───
+     Farbentscheidung vom 28.08.2026 (Anprobe im Mockup): Petrol statt der
+     bisherigen --chip-Fläche. Der feste Hex #1c6e7d wird bewusst über
+     var(--grund) gemischt statt durch ein Token ersetzt: --grund ist im
+     Hellen fast weiß und im Dunkeln fast schwarz, dieselbe Regel ergibt
+     dadurch von selbst einen hellen Petrolschimmer bzw. ein dunkles
+     Petrol — ein eigenes Token bräuchte zwei gepflegte Werte für dieselbe
+     Farbe. */
   .kopfbox {
     display: grid; grid-template-columns: auto 1fr auto; align-items: center;
     column-gap: 12px; row-gap: 12px; padding: 14px 16px;
-    background: var(--chip); border-radius: 12px;
+    background: color-mix(in srgb, #1c6e7d 13%, var(--grund));
+    border: 1px solid color-mix(in srgb, #1c6e7d 26%, var(--grund));
+    border-radius: 12px;
   }
   .avatar {
     width: 40px; height: 40px; border-radius: 50%; flex: none;
@@ -521,12 +830,11 @@ export function renderSeite(stand: BoardStand, betrachter: Betrachter | null): s
 ${LOGO_SVG}
   <h1 class="bereich">Teamboard</h1>
   <span id="stand"></span>
-  <select id="projekt-filter"></select>
-  <span id="projekt-chip"></span>
   <span id="ausgeblendet-chip"></span>
 </header>
 <div id="banner"></div>
 <div id="zeiten-hinweis"></div>
+<div class="filterbereich"><div id="filterzeile" class="filterzeile"></div></div>
 <div id="ausgeblendet-liste"></div>
 <div id="lanes"></div>
 <div id="panel" hidden></div>
@@ -551,18 +859,48 @@ ${LOGO_SVG}
   // Lane-IDs mit aufgeklapptem "+n weitere" — außerhalb von zeichne(), damit
   // der alle 10s komplette Neuaufbau sie nicht vergisst.
   var aufgeklappteLanes = new Set();
-  // Projekt-Filter-Auswahl (Task 9) — ebenfalls außerhalb von zeichne(),
-  // überlebt den 10-s-Refresh wie Scroll/Aufklappen. Wird NICHT gespeichert
-  // (Spec §6) — reine Client-Variable.
-  var ausgewaehltesProjekt = null;
+  // Welches Filter-Panel gerade aufgeklappt ist (Schlüssel der Dimension,
+  // sonst null) — außerhalb von zeichne(), damit der 10-s-Neuaufbau es nicht
+  // zuklappt. Der Filter-INHALT steht dagegen in einstellungen.filter und
+  // wird gespeichert (s. dort).
+  var offenesFilterPanel = null;
+  // Feste Werte der zwei geschlossenen Dimensionen und der zwei Umschalter.
+  // Schlüssel = das, was gespeichert wird (statusTyp bzw. Fälligkeits-Topf),
+  // Text = das, was in der Leiste steht.
+  var FAELLIGKEIT_WERTE = [
+    { wert: "ueberfaellig", text: "überfällig", anzahl: null },
+    { wert: "heute", text: "heute", anzahl: null },
+    { wert: "woche", text: "diese Woche", anzahl: null },
+    { wert: "ohneTermin", text: "ohne Termin", anzahl: null }
+  ];
+  var STATUS_WERTE = [
+    { wert: "todo", text: "To-do", anzahl: null },
+    { wert: "progress", text: "In Bearbeitung", anzahl: null },
+    { wert: "review", text: "Review", anzahl: null },
+    { wert: "stuck", text: "Blockiert", anzahl: null }
+  ];
+  var SCHALTER = [
+    { schluessel: "nurPrio", text: "nur Prio" },
+    { schluessel: "nurLaufendeProjekte", text: "nur laufende Projekte" }
+  ];
   // Zuletzt geladene Zeitsummen je awork-userId + Hinweis (Task 9) — vom
   // separaten /zeiten-Fetch befüllt, unabhängig vom Board-Stand.
   var zeitenProNutzer = {};
   var zeitenHinweis = null;
-  // Persönliche Einstellungen (Reihenfolge/Ausblenden, Task 10) — vom
-  // /einstellungen-Fetch beim Start befüllt, danach lokal bei jeder
-  // Drag-/Ausblenden-Aktion sofort weitergeschrieben und per PUT gesichert.
-  var einstellungen = { reihenfolge: null, ausgeblendet: [] };
+  // Persönliche Einstellungen (Reihenfolge/Ausblenden, Task 10; seit der
+  // Filterleiste zusätzlich filter) — vom /einstellungen-Fetch beim Start
+  // befüllt, danach lokal bei jeder Drag-/Ausblenden-/Filter-Aktion sofort
+  // weitergeschrieben und per PUT gesichert.
+  //
+  // Der Projekt-Filter wird damit ab jetzt MIT gespeichert. Die
+  // Nicht-Speicherung aus Stufe-2-Spec §6 galt der damaligen Form: ein
+  // einzelnes, flüchtiges Dropdown ohne sichtbaren Zustand — ein über Nacht
+  // vergessener Filter hätte still Lanes versteckt. Die Leiste hebt das auf:
+  // jeder aktive Filter steht als grüner Chip mit eigenem × daneben, samt
+  // "alle Filter zurücksetzen". Ein Chip, der sich als einziger nach dem
+  // Reload verabschiedet, wäre der sichere Weg zu einem verwirrten Team
+  // (Entscheidung vom 28.08.2026).
+  var einstellungen = { reihenfolge: null, ausgeblendet: [], filter: standardFilter() };
   // Ob die Ausgeblendet-Liste unter dem Chip gerade aufgeklappt ist —
   // außerhalb von zeichne(), damit der 10-s-Neuaufbau sie nicht zuklappt.
   var ausgeblendetOffen = false;
@@ -619,16 +957,36 @@ ${LOGO_SVG}
 
   ${String(initialen)}
 
-  // P1 fortgeführt (Task 9): formatiereZeit/zeitFelder/projekteAusBoard/
-  // wendeProjektFilterAn sind oben ebenfalls als exportierte, testbare
-  // TS-Funktionen definiert und werden hier eingebettet.
+  // P1 fortgeführt (Task 9): formatiereZeit/zeitFelder/projekteAusBoard
+  // sind oben ebenfalls als exportierte, testbare TS-Funktionen definiert
+  // und werden hier eingebettet.
   ${String(formatiereZeit)}
 
   ${String(zeitFelder)}
 
   ${String(projekteAusBoard)}
 
-  ${String(wendeProjektFilterAn)}
+  // Filterleiste (F2): die Auswertung steht ebenfalls oben als exportierte,
+  // testbare TS-Funktion — ohne diese Zeilen gäbe es sie im Browser nicht.
+  ${String(projektArtenAusBoard)}
+
+  ${String(arbeitsartenAusBoard)}
+
+  ${String(standardFilter)}
+
+  ${String(heuteAusStand)}
+
+  ${String(sonntagDerWoche)}
+
+  ${String(istFilterAktiv)}
+
+  ${String(wirksamerFilter)}
+
+  ${String(projektPasst)}
+
+  ${String(aufgabePasst)}
+
+  ${String(wendeFilterAn)}
 
   // Task 10: wendeEinstellungenAn ebenfalls oben als exportierte, testbare
   // TS-Funktion definiert und hier eingebettet.
@@ -656,12 +1014,17 @@ ${LOGO_SVG}
     var scrollLeft = wurzel.scrollLeft;
     wurzel.textContent = "";
     // Erst die persönlichen Einstellungen (Reihenfolge/Ausblenden) anwenden,
-    // dann den Projekt-Filter, dann zeichnen (Task 10 — Anwendungsreihenfolge
+    // dann die Filterleiste, dann zeichnen (Task 10 — Anwendungsreihenfolge
     // aus Task 9 fortgeführt).
     var angewendet = wendeEinstellungenAn(stand.board.lanes, einstellungen);
     letzteSichtbareLanes = angewendet.sichtbar;
     letzteAusgeblendeteLanes = angewendet.ausgeblendet;
-    var lanes = wendeProjektFilterAn(angewendet.sichtbar, ausgewaehltesProjekt);
+    var lanes = wendeFilterAn(
+      angewendet.sichtbar,
+      stand.projekte || {},
+      einstellungen.filter,
+      heuteAusStand(stand.board.stand)
+    );
     lanes.forEach(function (lane) {
       var box = el("section", "lane");
       // Kopfbox (Facelift): Avatar, Name, Ausblenden-× und darunter das
@@ -687,6 +1050,7 @@ ${LOGO_SVG}
         einstellungen = {
           reihenfolge: berechneNeueReihenfolge(gezogeneId, lane.userId),
           ausgeblendet: einstellungen.ausgeblendet,
+          filter: einstellungen.filter,
         };
         zeichne();
         speichereEinstellungen();
@@ -844,37 +1208,10 @@ ${LOGO_SVG}
       hinweisEl.style.display = "none";
     }
 
-    // Projekt-Filter neu befüllen (Task 9) — Board-Projekte können sich mit
-    // jedem Nachladen ändern; die Auswahl selbst bleibt in
-    // ausgewaehltesProjekt erhalten (Client-Variable, kein Speichern).
-    var projekte = projekteAusBoard(stand.board);
-    var filterSelect = document.getElementById("projekt-filter");
-    filterSelect.textContent = "";
-    var alleOption = document.createElement("option");
-    alleOption.value = "";
-    alleOption.textContent = "Alle Projekte";
-    filterSelect.appendChild(alleOption);
-    projekte.forEach(function (p) {
-      var option = document.createElement("option");
-      option.value = p.id;
-      option.textContent = p.name;
-      filterSelect.appendChild(option);
-    });
-    filterSelect.value = ausgewaehltesProjekt || "";
-
-    // Aktiver Filter als Chip mit "Filter aufheben"-Button.
-    var chipEl = document.getElementById("projekt-chip");
-    chipEl.textContent = "";
-    if (ausgewaehltesProjekt !== null) {
-      var gefunden = projekte.find(function (p) { return p.id === ausgewaehltesProjekt; });
-      chipEl.appendChild(el("span", "chip", gefunden ? gefunden.name : ausgewaehltesProjekt));
-      var aufheben = el("button", "chip-aufheben", "Filter aufheben");
-      aufheben.addEventListener("click", function () {
-        ausgewaehltesProjekt = null;
-        zeichne();
-      });
-      chipEl.appendChild(aufheben);
-    }
+    // Filterleiste neu aufbauen — die Werte der Panels hängen am Board-Stand
+    // (welche Projekte, Arten und Arbeitsarten gerade vorkommen) und ändern
+    // sich mit jedem Nachladen; die AUSWAHL steht in einstellungen.filter.
+    baueFilterleiste();
 
     // "N ausgeblendet"-Chip mit aufklappbarer Liste + "einblenden"-Buttons
     // (Task 10) — beides per createElement gebaut, keine Inline-Handler.
@@ -910,6 +1247,255 @@ ${LOGO_SVG}
         ausgeblendetListeEl.style.display = "none";
       }
     }
+  }
+
+  // ─── Filterleiste (F2) ──────────────────────────────────────────────
+  //
+  // Die Leiste wird bei jedem aktualisiereKopf() komplett neu gebaut — wie
+  // die Lanes selbst. Zustand, der das überleben muss, steht außerhalb:
+  // die Auswahl in einstellungen.filter, das offene Panel in
+  // offenesFilterPanel. Alles per el()/textContent, keine Inline-Handler.
+
+  /** Flache Kopie des Filters — nie das gespeicherte Objekt selbst ändern. */
+  function filterKopie() {
+    var f = einstellungen.filter;
+    return {
+      projektArten: f.projektArten,
+      projekt: f.projekt,
+      faelligkeit: f.faelligkeit,
+      status: f.status,
+      arbeitsarten: f.arbeitsarten,
+      nurPrio: f.nurPrio,
+      nurLaufendeProjekte: f.nurLaufendeProjekte
+    };
+  }
+
+  function setzeFilter(neu) {
+    einstellungen = {
+      reihenfolge: einstellungen.reihenfolge,
+      ausgeblendet: einstellungen.ausgeblendet,
+      filter: neu
+    };
+    zeichne();
+    speichereEinstellungen();
+  }
+
+  /** Einen Wert einer Mehrfach-Dimension an- oder abwählen. */
+  function schalteWert(schluessel, wert) {
+    var neu = filterKopie();
+    var liste = neu[schluessel];
+    neu[schluessel] = liste.indexOf(wert) === -1
+      ? liste.concat([wert])
+      : liste.filter(function (v) { return v !== wert; });
+    setzeFilter(neu);
+  }
+
+  function setzeProjekt(projektId) {
+    var neu = filterKopie();
+    neu.projekt = projektId;
+    setzeFilter(neu);
+  }
+
+  function schalteSchalter(schluessel) {
+    var neu = filterKopie();
+    neu[schluessel] = !neu[schluessel];
+    setzeFilter(neu);
+  }
+
+  function klappeFilterPanel(schluessel) {
+    offenesFilterPanel = offenesFilterPanel === schluessel ? null : schluessel;
+    aktualisiereKopf();
+  }
+
+  /**
+   * Ein Aufklapp-Knopf mit Panel. eintraege: [{ wert, text, anzahl }].
+   * istGewaehlt/aufWahl kommen von außen — dieselben zwei Bausteine bedienen
+   * damit Mehrfachwahl (Checkbox) und Einzelwahl (Radio, Dimension Projekt).
+   */
+  function baueDimension(schluessel, titel, eintraege, anzahlGewaehlt, einzelwahl, istGewaehlt, aufWahl) {
+    var gruppe = el("span", "fgruppe");
+    var knopf = el("button", "fdrop");
+    knopf.type = "button";
+    knopf.appendChild(el("span", null, titel));
+    if (anzahlGewaehlt > 0) knopf.appendChild(el("span", "gewaehlt", String(anzahlGewaehlt)));
+    knopf.appendChild(el("span", "pfeil", "▾"));
+    knopf.addEventListener("click", function () {
+      klappeFilterPanel(schluessel);
+    });
+    gruppe.appendChild(knopf);
+    if (offenesFilterPanel !== schluessel) return gruppe;
+    var panel = el("div", "fpanel");
+    if (eintraege.length === 0) panel.appendChild(el("div", "leer", "keine Werte im Board"));
+    // Zahlen im Panel zählen die Projekte IM BOARD, nicht die des
+    // Workspaces — die Board-Antwort trägt bewusst nur die Projekte, die im
+    // Board vorkommen. Ohne diese Zeile erwartete jemand bei
+    // "Website-Support" die 58 aus awork und sähe eine 7. Die Beschriftung
+    // hängt an der Existenz von Zahlen statt an einem Parameter je
+    // Aufrufstelle: so kann sie nicht vergessen werden, wenn später eine
+    // weitere Dimension Zahlen bekommt.
+    var mitZahlen = eintraege.some(function (eintrag) {
+      return eintrag.anzahl !== null;
+    });
+    if (mitZahlen) panel.appendChild(el("div", "fkopf", "Zahlen = Projekte im Board"));
+    eintraege.forEach(function (eintrag) {
+      var zeile = document.createElement("label");
+      var kasten = document.createElement("input");
+      kasten.type = einzelwahl ? "radio" : "checkbox";
+      // Gemeinsamer Name, damit die Einzelwahl auch nativ eine Einzelwahl ist.
+      kasten.name = "filter-" + schluessel;
+      kasten.checked = istGewaehlt(eintrag.wert);
+      kasten.addEventListener("change", function () {
+        aufWahl(eintrag.wert);
+      });
+      zeile.appendChild(kasten);
+      // eintrag.text ist Fremddatum aus awork (Projekt-Art, Arbeitsart,
+      // Projektname) — el() setzt es über textContent, nie als Markup.
+      zeile.appendChild(el("span", null, eintrag.text));
+      if (eintrag.anzahl !== null) zeile.appendChild(el("span", "anzahl", String(eintrag.anzahl)));
+      panel.appendChild(zeile);
+    });
+    gruppe.appendChild(panel);
+    return gruppe;
+  }
+
+  /** Ein gewählter Filter als grüner Chip mit eigenem ×. */
+  function baueFilterChip(gruppeText, wertText, aufEntfernen) {
+    var chip = el("span", "aktivchip");
+    if (gruppeText) chip.appendChild(el("b", null, gruppeText));
+    chip.appendChild(el("span", null, wertText));
+    var weg = el("button", "weg", "×");
+    weg.type = "button";
+    weg.title = "Filter entfernen";
+    weg.addEventListener("click", aufEntfernen);
+    chip.appendChild(weg);
+    return chip;
+  }
+
+  function baueFilterleiste() {
+    var leiste = document.getElementById("filterzeile");
+    leiste.textContent = "";
+    var f = einstellungen.filter;
+    var stammdaten = stand.projekte || {};
+    var projekte = projekteAusBoard(stand.board);
+
+    leiste.appendChild(baueDimension(
+      "projektArten",
+      "Projekt-Art",
+      projektArtenAusBoard(stand.board, stammdaten).map(function (a) {
+        return { wert: a.wert, text: a.wert, anzahl: a.anzahl };
+      }),
+      f.projektArten.length,
+      false,
+      function (wert) { return f.projektArten.indexOf(wert) !== -1; },
+      function (wert) { schalteWert("projektArten", wert); }
+    ));
+
+    // "Alle Projekte" an erster Stelle — dieselbe Bedienung wie das frühere
+    // <select>, nur als Panel.
+    var projektEintraege = [{ wert: null, text: "Alle Projekte", anzahl: null }];
+    projekte.forEach(function (p) {
+      projektEintraege.push({ wert: p.id, text: p.name, anzahl: null });
+    });
+    leiste.appendChild(baueDimension(
+      "projekt",
+      "Projekt",
+      projektEintraege,
+      f.projekt === null ? 0 : 1,
+      true,
+      function (wert) { return f.projekt === wert; },
+      function (wert) { setzeProjekt(wert); }
+    ));
+
+    leiste.appendChild(baueDimension(
+      "faelligkeit",
+      "Fälligkeit",
+      FAELLIGKEIT_WERTE,
+      f.faelligkeit.length,
+      false,
+      function (wert) { return f.faelligkeit.indexOf(wert) !== -1; },
+      function (wert) { schalteWert("faelligkeit", wert); }
+    ));
+
+    leiste.appendChild(baueDimension(
+      "status",
+      "Aufgaben-Status",
+      STATUS_WERTE,
+      f.status.length,
+      false,
+      function (wert) { return f.status.indexOf(wert) !== -1; },
+      function (wert) { schalteWert("status", wert); }
+    ));
+
+    leiste.appendChild(baueDimension(
+      "arbeitsarten",
+      "Arbeitsart",
+      arbeitsartenAusBoard(stand.board).map(function (a) {
+        return { wert: a, text: a, anzahl: null };
+      }),
+      f.arbeitsarten.length,
+      false,
+      function (wert) { return f.arbeitsarten.indexOf(wert) !== -1; },
+      function (wert) { schalteWert("arbeitsarten", wert); }
+    ));
+
+    // Die zwei Umschalter: AUS als Knopf in der Reihe, AN weiter unten als
+    // grüner Chip — in der Leiste stehen nur die gewählten Filter als Chip.
+    SCHALTER.forEach(function (schalter) {
+      if (f[schalter.schluessel]) return;
+      var knopf = el("button", "fchip", schalter.text);
+      knopf.type = "button";
+      knopf.addEventListener("click", function () {
+        schalteSchalter(schalter.schluessel);
+      });
+      leiste.appendChild(knopf);
+    });
+
+    f.projektArten.forEach(function (wert) {
+      leiste.appendChild(baueFilterChip("Art", wert, function () {
+        schalteWert("projektArten", wert);
+      }));
+    });
+    if (f.projekt !== null) {
+      // Ein gespeichertes Projekt, das es im Board nicht mehr gibt, zeigt
+      // seine ID — wie bisher der Chip neben dem <select>; das × räumt auf.
+      var gefunden = projekte.find(function (p) { return p.id === f.projekt; });
+      leiste.appendChild(baueFilterChip("Projekt", gefunden ? gefunden.name : f.projekt, function () {
+        setzeProjekt(null);
+      }));
+    }
+    f.faelligkeit.forEach(function (wert) {
+      var eintrag = FAELLIGKEIT_WERTE.find(function (e) { return e.wert === wert; });
+      leiste.appendChild(baueFilterChip("Fällig", eintrag ? eintrag.text : wert, function () {
+        schalteWert("faelligkeit", wert);
+      }));
+    });
+    f.status.forEach(function (wert) {
+      var eintrag = STATUS_WERTE.find(function (e) { return e.wert === wert; });
+      leiste.appendChild(baueFilterChip("Status", eintrag ? eintrag.text : wert, function () {
+        schalteWert("status", wert);
+      }));
+    });
+    f.arbeitsarten.forEach(function (wert) {
+      leiste.appendChild(baueFilterChip("Arbeitsart", wert, function () {
+        schalteWert("arbeitsarten", wert);
+      }));
+    });
+    SCHALTER.forEach(function (schalter) {
+      if (!f[schalter.schluessel]) return;
+      leiste.appendChild(baueFilterChip("", schalter.text, function () {
+        schalteSchalter(schalter.schluessel);
+      }));
+    });
+
+    // Ohne aktiven Filter wäre der Knopf ein toter Knopf.
+    if (!istFilterAktiv(f)) return;
+    var zuruecksetzen = el("button", "zuruecksetzen", "alle Filter zurücksetzen");
+    zuruecksetzen.type = "button";
+    zuruecksetzen.addEventListener("click", function () {
+      offenesFilterPanel = null;
+      setzeFilter(standardFilter());
+    });
+    leiste.appendChild(zuruecksetzen);
   }
 
   function ticke() {
@@ -987,7 +1573,14 @@ ${LOGO_SVG}
       })
       .then(function (antwort) {
         if (!antwort) return;
-        einstellungen = antwort;
+        einstellungen = {
+          reihenfolge: antwort.reihenfolge,
+          ausgeblendet: antwort.ausgeblendet,
+          // Gespeicherte Einstellungen von vor der Filterleiste tragen kein
+          // filter-Feld — dann bleibt es beim leeren Filter, statt beim
+          // ersten Klick auf eine undefinierte Liste zu laufen.
+          filter: antwort.filter || standardFilter()
+        };
         zeichne();
       })
       .catch(function (fehler) {
@@ -1032,6 +1625,7 @@ ${LOGO_SVG}
     einstellungen = {
       reihenfolge: einstellungen.reihenfolge,
       ausgeblendet: einstellungen.ausgeblendet.concat([userId]),
+      filter: einstellungen.filter,
     };
     zeichne();
     speichereEinstellungen();
@@ -1041,6 +1635,7 @@ ${LOGO_SVG}
     einstellungen = {
       reihenfolge: einstellungen.reihenfolge,
       ausgeblendet: einstellungen.ausgeblendet.filter(function (id) { return id !== userId; }),
+      filter: einstellungen.filter,
     };
     zeichne();
     speichereEinstellungen();
@@ -1335,18 +1930,29 @@ ${LOGO_SVG}
   // schließt weiterhin: das ist eine bewusste Entscheidung des Nutzers.
   document.addEventListener("keydown", function (ev) {
     if (ev.key !== "Escape") return;
+    // Zuerst ein offenes Filter-Panel: es liegt sichtbar über der Seite und
+    // ist das, was der Nutzer gerade loswerden will. Erst wenn keines offen
+    // ist, gilt die unveränderte Detail-Panel-Logik darunter.
+    if (offenesFilterPanel !== null) {
+      offenesFilterPanel = null;
+      aktualisiereKopf();
+      return;
+    }
     if (erledigt !== null && erledigt.vorgangId !== null) return;
     schliessePanel();
   });
 
-  // Projekt-Filter-Auswahl: Änderung landet in der Client-Variable, kein
-  // Speichern (Spec §6). Der Listener wird nur einmal gesetzt — die
-  // <option>-Kinder werden bei jedem aktualisiereKopf() neu aufgebaut, das
-  // <select>-Element selbst bleibt dabei erhalten.
-  document.getElementById("projekt-filter").addEventListener("change", function (ev) {
-    ausgewaehltesProjekt = ev.target.value || null;
-    zeichne();
-  });
+  // Klick außerhalb der Leiste schließt ein offenes Filter-Panel. Bewusst in
+  // der CAPTURE-Phase (drittes Argument true): ein Klick INNERHALB der Leiste
+  // baut sie über aktualisiereKopf() neu auf, danach hinge ev.target an
+  // keinem Dokument mehr und leiste.contains(ev.target) wäre falsch — das
+  // gerade geöffnete Panel schlösse sich sofort wieder.
+  document.addEventListener("click", function (ev) {
+    if (offenesFilterPanel === null) return;
+    if (document.getElementById("filterzeile").contains(ev.target)) return;
+    offenesFilterPanel = null;
+    aktualisiereKopf();
+  }, true);
 
   // Sofortiges Nachladen beim Tab-Wechsel (Stufe 3, Task 9): Rückkehr in
   // den Tab soll nicht erst auf den nächsten 10-s-Poll warten. Ruft

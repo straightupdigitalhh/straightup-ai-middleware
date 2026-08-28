@@ -224,6 +224,7 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         faelligAm: null,
         istPrio: false,
         istWiederkehrend: false,
+        arbeitsart: null,
         assigneeIds: ['u-lea'],
       },
       {
@@ -237,6 +238,7 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         faelligAm: '2026-08-27T00:00:00Z',
         istPrio: true,
         istWiederkehrend: false,
+        arbeitsart: null,
         assigneeIds: ['u-lea', 'u-jan'],
       },
       {
@@ -250,6 +252,7 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         faelligAm: null,
         istPrio: false,
         istWiederkehrend: false,
+        arbeitsart: null,
         assigneeIds: [],
       },
     ]);
@@ -280,17 +283,21 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         faelligAm: null,
         istPrio: false,
         istWiederkehrend: false,
+        arbeitsart: null,
         assigneeIds: [],
       },
     ]);
   });
 
-  it('setzt istWiederkehrend und assigneeIds aus der Rohantwort von /me/allavailabletasks (Produktionskette der einzigen Stelle, die OffeneAufgabe erzeugt)', async () => {
+  it('setzt istWiederkehrend, arbeitsart und assigneeIds aus der Rohantwort von /me/allavailabletasks (Produktionskette der einzigen Stelle, die OffeneAufgabe erzeugt)', async () => {
     fakeFetch(200, [
       {
         id: 't-5',
         name: 'Wiederkehrende Wartung',
         isRecurring: true,
+        // Arbeitsart der Aufgabe — Werte im echten Workspace: Interne
+        // Arbeit, Vertriebstätigkeit, Projektarbeit.
+        typeOfWork: { id: 'tow-1', name: 'Projektarbeit' },
         taskStatus: { name: 'Offen', type: 'todo' },
         assignees: [{ id: 'u-lea' }, { id: 'u-jan' }],
       },
@@ -298,7 +305,81 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
     const client = new AworkClient('T', BASE_URL);
     const result = await client.getAvailableTasks();
     expect(result[0].istWiederkehrend).toBe(true);
+    expect(result[0].arbeitsart).toBe('Projektarbeit');
     expect(result[0].assigneeIds).toEqual(['u-lea', 'u-jan']);
+  });
+
+  it('lässt arbeitsart null, wenn die Aufgabe kein typeOfWork trägt (nicht jede Aufgabe hat eine Arbeitsart)', async () => {
+    fakeFetch(200, [
+      { id: 't-6', name: 'Ohne Arbeitsart', taskStatus: { name: 'Offen', type: 'todo' }, assignees: [] },
+      { id: 't-7', name: 'Leeres typeOfWork', typeOfWork: null, taskStatus: { name: 'Offen', type: 'todo' }, assignees: [] },
+    ]);
+    const client = new AworkClient('T', BASE_URL);
+    const result = await client.getAvailableTasks();
+    expect(result.map((a) => a.arbeitsart)).toEqual([null, null]);
+  });
+
+  // ─── getProjectsLeicht ───────────────────────────────────────
+
+  it('liefert Projekt-Stammdaten (Art + Status-Typ) aus GET /projects, paginiert mit pageSize 1000', async () => {
+    // Echte Antwortform von GET /projects (28.08.2026), auf die zwei
+    // gebrauchten Felder gekürzt.
+    const calls = pagedFetch([
+      [
+        {
+          id: 'proj-intern',
+          name: 'straightup Intern',
+          projectType: { id: 'pt-1', name: 'straightup Projekt' },
+          projectStatus: { id: 'ps-1', name: 'Läuft', type: 'progress' },
+        },
+        {
+          id: 'proj-kunde-x',
+          name: 'Kunde X',
+          projectType: { id: 'pt-2', name: 'Website-Support' },
+          projectStatus: { id: 'ps-2', name: 'Abgeschlossen', type: 'closed' },
+        },
+      ],
+    ]);
+    const client = new AworkClient('T', BASE_URL);
+    const result = await client.getProjectsLeicht();
+    expect(result).toEqual([
+      { id: 'proj-intern', artName: 'straightup Projekt', statusTyp: 'progress' },
+      { id: 'proj-kunde-x', artName: 'Website-Support', statusTyp: 'closed' },
+    ]);
+    const url = decodeURIComponent(calls[0].url);
+    expect(url).toContain('/projects?');
+    expect(url).toContain('pageSize=1000');
+    // Nur eine Seite geholt: die erste Seite war nicht voll.
+    expect(calls).toHaveLength(1);
+  });
+
+  it('liefert artName/statusTyp null, wenn projectType bzw. projectStatus fehlen (6 Projekte ohne Art im echten Workspace)', async () => {
+    fakeFetch(200, [
+      { id: 'proj-ohne-art', name: 'Ohne Art' },
+      { id: 'proj-leere-felder', name: 'Leere Felder', projectType: null, projectStatus: null },
+    ]);
+    const client = new AworkClient('T', BASE_URL);
+    expect(await client.getProjectsLeicht()).toEqual([
+      { id: 'proj-ohne-art', artName: null, statusTyp: null },
+      { id: 'proj-leere-felder', artName: null, statusTyp: null },
+    ]);
+  });
+
+  it('holt alle Seiten (fetchAllPages), wenn die erste Seite voll ist', async () => {
+    const ersteSeite = Array.from({ length: 1000 }, (_, i) => ({
+      id: `p-${i}`,
+      projectType: { name: 'Website-Support' },
+      projectStatus: { type: 'progress' },
+    }));
+    const calls = pagedFetch([
+      ersteSeite,
+      [{ id: 'p-1000', projectType: { name: 'Vorlagen' }, projectStatus: { type: 'not-started' } }],
+    ]);
+    const client = new AworkClient('T', BASE_URL);
+    const result = await client.getProjectsLeicht();
+    expect(result).toHaveLength(1001);
+    expect(result[1000]).toEqual({ id: 'p-1000', artName: 'Vorlagen', statusTyp: 'not-started' });
+    expect(calls).toHaveLength(2);
   });
 
   // ─── Teamboard: Schreibmethoden (Stufe 3) ────────────────────

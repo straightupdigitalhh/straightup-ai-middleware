@@ -9,15 +9,44 @@ import { createPageAuth } from '../src/services/auth.js';
 import { createTeamboardPageRouter } from '../src/routes/teamboard.js';
 import type { BoardLader, BoardStand } from '../src/services/teamboard/daten.js';
 import type { Betrachter } from '../src/services/teamboard/seite.js';
+import type { ProjekteLader, ProjekteProId } from '../src/services/teamboard/projekte.js';
 
 const STUB_MARKER = 'STUB-RENDER-MARKER';
 
 const boardStandFixture: BoardStand = {
   board: {
     stand: '2026-08-26T10:00:00.000Z',
-    lanes: [{ userId: 'u-lea', name: 'Lea Stöber', timer: null, aufgaben: [] }],
+    lanes: [
+      {
+        userId: 'u-lea',
+        name: 'Lea Stöber',
+        timer: null,
+        aufgaben: [
+          {
+            id: 't-1',
+            name: 'Aufgabe',
+            kennung: null,
+            projektName: 'Kunde X',
+            projektId: 'proj-karte',
+            statusName: 'Offen',
+            statusTyp: 'todo',
+            faelligAm: null,
+            istPrio: false,
+            istWiederkehrend: false,
+            arbeitsart: 'Projektarbeit',
+            assigneeIds: ['u-lea'],
+            ueberfaellig: false,
+          },
+        ],
+      },
+    ],
   },
   alterSekunden: 0,
+};
+
+const alleProjekteFixture: ProjekteProId = {
+  'proj-karte': { art: 'Website-Support', status: 'progress' },
+  'proj-nie-im-board': { art: 'Vorlagen', status: 'not-started' },
 };
 
 // ─── Test-App (Muster A, s. test/hub-routes.test.ts) ────────────────
@@ -33,7 +62,8 @@ function makeApp(
     // Task 8, Fix-Runde 1: der Stub trägt den Betrachter-Parameter mit —
     // sonst könnte diese Datei einen Page-Router, der ihn vergisst, nie
     // bemerken (weniger Parameter sind zuweisbar und compilieren stumm).
-    renderSeite?: (stand: BoardStand, betrachter: Betrachter | null) => string;
+    renderSeite?: (stand: BoardStand, betrachter: Betrachter | null, projekte: ProjekteProId) => string;
+    ladeProjekte?: ProjekteLader;
   } = {},
 ) {
   const db = openDb(':memory:');
@@ -41,15 +71,16 @@ function makeApp(
   const sessions = new SessionStore(db, users);
 
   const ladeBoard = opts.ladeBoard ?? (async () => boardStandFixture);
+  const ladeProjekte = opts.ladeProjekte ?? (async () => alleProjekteFixture);
   const renderSeite =
     opts.renderSeite ??
-    ((stand, betrachter) =>
-      `<!doctype html><p>${STUB_MARKER} ${stand.board.lanes.length} ${JSON.stringify(betrachter)}</p>`);
+    ((stand, betrachter, projekte) =>
+      `<!doctype html><p>${STUB_MARKER} ${stand.board.lanes.length} ${JSON.stringify(betrachter)} ${JSON.stringify(projekte)}</p>`);
 
   const app = express();
   app.use(express.json());
   app.use(createAuthRouter({ users, sessions }));
-  app.use(createTeamboardPageRouter({ ladeBoard, renderSeite, pageAuth: createPageAuth(sessions, '/app/') }));
+  app.use(createTeamboardPageRouter({ ladeBoard, ladeProjekte, renderSeite, pageAuth: createPageAuth(sessions, '/app/') }));
 
   const member = users.create({ email: 'team@straightup-digital.de', name: 'Team', role: 'member', password: 'member-pass-123' });
   // awork-Zuordnung, damit der durchgereichte Betrachter unterscheidbar ist.
@@ -90,6 +121,31 @@ describe('GET /teamboard — Session-Guard', () => {
     // Der Seiten-Router muss den Betrachter selbst aus der Session bilden —
     // BoardStand trägt ihn nicht.
     expect(res.text).toContain('{"aworkUserId":"u-lea","istAdmin":false}');
+  });
+
+  it('(b3) reicht die Projekt-Stammdaten der im Board vorkommenden Projekte an renderSeite durch (Filterleiste)', async () => {
+    const { app, member } = makeApp();
+    const cookie = await loginCookie(app, member.email, 'member-pass-123');
+    const res = await request(app).get('/teamboard').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('{"proj-karte":{"art":"Website-Support","status":"progress"}}');
+    // Projekte, die im Board nicht vorkommen, gehören nicht ins Dokument.
+    expect(res.text).not.toContain('proj-nie-im-board');
+  });
+
+  it('(b4) liefert die Seite auch aus, wenn die Projekt-Stammdaten nicht zu holen sind — dann ohne Projekt-Angaben', async () => {
+    const { app, member } = makeApp({
+      ladeProjekte: async () => {
+        throw new Error('awork API 500 bei projects');
+      },
+    });
+    const cookie = await loginCookie(app, member.email, 'member-pass-123');
+    const res = await request(app).get('/teamboard').set('Cookie', cookie);
+    // Die Filterleiste ist Komfort — ein Ausfall der Stammdaten darf die
+    // Seite nicht kosten (anders als ein Board-Ausfall, der zu 503 führt).
+    expect(res.status).toBe(200);
+    expect(res.text).toContain(STUB_MARKER);
+    expect(res.text).toContain('{}');
   });
 
   it('(c) abgelaufene Session → 302', async () => {

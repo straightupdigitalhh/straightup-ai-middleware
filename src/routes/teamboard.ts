@@ -3,9 +3,14 @@ import { getAuth, requireAdmin, type AuthContext } from '../services/auth.js';
 import { clientErrorMessage } from '../services/errors.js';
 import type { BoardLader, BoardStand } from '../services/teamboard/daten.js';
 import type { ZeitenProNutzer } from '../services/teamboard/zeiten.js';
+import { projekteFuerBoard, type ProjekteLader, type ProjekteProId } from '../services/teamboard/projekte.js';
 import type { ErledigenFehler, RueckgaengigFehler } from '../services/teamboard/erledigen.js';
 import type { Betrachter } from '../services/teamboard/seite.js';
-import type { TeamboardEinstellungen, TeamboardEinstellungenStore } from '../core/teamboard-einstellungen.js';
+import type {
+  TeamboardEinstellungen,
+  TeamboardEinstellungenStore,
+  TeamboardFilter,
+} from '../core/teamboard-einstellungen.js';
 import { UNDO_FENSTER_MS } from '../core/teamboard-erledigungen.js';
 
 /** Nur die zwei Methoden, die die Route tatsächlich braucht (T4, `erstelleErledigenDienst`). */
@@ -21,6 +26,7 @@ interface ErledigenDienst {
 interface Deps {
   ladeBoard: BoardLader;
   ladeZeiten: () => Promise<ZeitenProNutzer>;
+  ladeProjekte: ProjekteLader;
   ladeNutzerBild: (userId: string) => Promise<{ typ: string; bytes: Buffer } | null>;
   einstellungen: TeamboardEinstellungenStore;
   erledigenDienst: ErledigenDienst;
@@ -71,6 +77,10 @@ type AvatarCacheEintrag =
 // ─── Einstellungen-Validierung ────────────────────────────────────
 
 const EINSTELLUNGEN_MAX_EINTRAEGE = 100;
+// Obergrenze je Filter-Wert. Projekt-Arten und Arbeitsarten sind frei
+// benannte awork-Daten — hier zählt nur, dass niemand beliebig viel Text in
+// die Nutzer-Zeile schreibt.
+const FILTER_MAX_LAENGE = 200;
 
 function istGueltigeIdListe(wert: unknown): wert is string[] {
   return (
@@ -80,12 +90,70 @@ function istGueltigeIdListe(wert: unknown): wert is string[] {
   );
 }
 
-function parseEinstellungen(body: unknown): TeamboardEinstellungen | null {
+/**
+ * Filter-Werte werden NUR auf Typ, Anzahl und Länge geprüft, nicht gegen
+ * eine Werteliste: Projekt-Arten, Arbeitsarten und Projekt-IDs sind
+ * Fremddaten aus awork, und selbst bei den festen Schlüsseln (Fälligkeit,
+ * Status) wäre eine serverseitige Liste die falsche Bremse — ein Client,
+ * der einen neuen Wert kennt, bekäme sonst 400 auf das GESAMTE PUT und
+ * verlöre damit auch das Speichern von Lane-Reihenfolge und Ausgeblendet.
+ * Ein unbekannter Wert kostet nichts: er trifft im Client schlicht auf
+ * keine Karte.
+ */
+function istGueltigeWertListe(wert: unknown): wert is string[] {
+  return (
+    Array.isArray(wert) &&
+    wert.length <= EINSTELLUNGEN_MAX_EINTRAEGE &&
+    wert.every((v) => typeof v === 'string' && v.length <= FILTER_MAX_LAENGE)
+  );
+}
+
+/**
+ * Fehlt `filter` ganz, kommt `undefined` zurück (nicht der leere Filter):
+ * ein Client von vor der Filterleiste — ein über den Deploy hinweg offener
+ * Tab, der wegen Drag-and-drop oder Ausblenden ein PUT im alten Format
+ * schickt — darf damit weder scheitern noch den in einem anderen Tab
+ * gesetzten Filter löschen. Die Route lässt den gespeicherten Wert dann
+ * stehen; nur ein ausdrücklich mitgeschicktes `filter` schreibt.
+ * null heißt: mitgeschickt, aber ungültig ⇒ 400.
+ */
+function parseFilter(wert: unknown): TeamboardFilter | null | undefined {
+  if (wert === undefined) return undefined;
+  if (typeof wert !== 'object' || wert === null || Array.isArray(wert)) return null;
+  const f = wert as Record<string, unknown>;
+  if (!istGueltigeWertListe(f.projektArten)) return null;
+  if (f.projekt !== null && !(typeof f.projekt === 'string' && f.projekt.length <= FILTER_MAX_LAENGE)) return null;
+  if (!istGueltigeWertListe(f.faelligkeit)) return null;
+  if (!istGueltigeWertListe(f.status)) return null;
+  if (!istGueltigeWertListe(f.arbeitsarten)) return null;
+  if (typeof f.nurPrio !== 'boolean') return null;
+  if (typeof f.nurLaufendeProjekte !== 'boolean') return null;
+  return {
+    projektArten: f.projektArten,
+    projekt: f.projekt as string | null,
+    faelligkeit: f.faelligkeit,
+    status: f.status,
+    arbeitsarten: f.arbeitsarten,
+    nurPrio: f.nurPrio,
+    nurLaufendeProjekte: f.nurLaufendeProjekte,
+  };
+}
+
+/** filter fehlt im Body ⇒ das Feld fehlt auch hier (s. parseFilter). */
+type GesendeteEinstellungen = Omit<TeamboardEinstellungen, 'filter'> & { filter?: TeamboardFilter };
+
+function parseEinstellungen(body: unknown): GesendeteEinstellungen | null {
   if (typeof body !== 'object' || body === null) return null;
   const b = body as Record<string, unknown>;
   if (b.reihenfolge !== null && !istGueltigeIdListe(b.reihenfolge)) return null;
   if (!istGueltigeIdListe(b.ausgeblendet)) return null;
-  return { reihenfolge: b.reihenfolge as string[] | null, ausgeblendet: b.ausgeblendet as string[] };
+  const filter = parseFilter(b.filter);
+  if (filter === null) return null;
+  return {
+    reihenfolge: b.reihenfolge as string[] | null,
+    ausgeblendet: b.ausgeblendet as string[],
+    ...(filter === undefined ? {} : { filter }),
+  };
 }
 
 // ─── Betrachter ───────────────────────────────────────────────────
@@ -103,6 +171,31 @@ function parseEinstellungen(body: unknown): TeamboardEinstellungen | null {
 function betrachterAus(auth: AuthContext | undefined): Betrachter | null {
   if (!auth || auth.via !== 'session' || !auth.user) return null;
   return { aworkUserId: auth.user.aworkUserId, istAdmin: auth.role === 'admin' };
+}
+
+// ─── Projekt-Stammdaten für die Filterleiste ──────────────────────
+//
+// Getrennter Lader mit eigener TTL (5 min, s. services/teamboard/projekte.ts)
+// — er hängt NICHT am Board-Cache. Sein Wurf (awork war noch nie erreichbar)
+// wird hier abgefangen: die Filterleiste ist Komfort und darf weder die
+// /board-Antwort noch die gerenderte Seite kosten. Nach einem ersten Erfolg
+// liefert der Lader von sich aus den letzten Stand (stale) und kommt hier
+// gar nicht mehr in den catch-Zweig.
+
+async function projekteZumBoard(
+  ladeProjekte: ProjekteLader,
+  board: BoardStand['board'],
+): Promise<ProjekteProId> {
+  try {
+    return projekteFuerBoard(board, await ladeProjekte());
+  } catch (fehler) {
+    // Nur die Meldung loggen, nie das Fehlerobjekt (könnte den Token enthalten).
+    console.error(
+      'teamboard: Projekt-Stammdaten laden fehlgeschlagen —',
+      fehler instanceof Error ? fehler.message : String(fehler),
+    );
+    return {};
+  }
 }
 
 /**
@@ -199,12 +292,13 @@ export function createTeamboardRouter(deps: Deps): Router {
   router.get('/api/teamboard/board', async (_req: Request, res: Response) => {
     try {
       const stand = await deps.ladeBoard();
+      const projekte = await projekteZumBoard(deps.ladeProjekte, stand.board);
       // private: die Antwort trägt mit betrachter die Identität des
       // Aufrufers. no-store zusätzlich, weil sich der Board-Stand alle 10 s
       // ändert und der Client ohnehin in diesem Takt neu fragt.
       res
         .set('Cache-Control', 'private, no-store')
-        .json({ ...stand, betrachter: betrachterAus(getAuth(res)) });
+        .json({ ...stand, betrachter: betrachterAus(getAuth(res)), projekte });
     } catch (e: any) {
       console.error(`❌ teamboard: Board laden fehlgeschlagen: ${e?.message ?? e}`);
       res.status(502).json({ error: 'awork_unreachable', message: clientErrorMessage(e) });
@@ -272,14 +366,23 @@ export function createTeamboardRouter(deps: Deps): Router {
         res.status(403).json({ error: 'forbidden', message: 'Nur per Session-Login' });
         return;
       }
-      const einstellungen = parseEinstellungen(req.body);
-      if (!einstellungen) {
+      const gesendet = parseEinstellungen(req.body);
+      if (!gesendet) {
         res.status(400).json({
           error: 'validation',
-          message: 'reihenfolge muss null oder eine Liste von awork-User-IDs sein, ausgeblendet eine Liste von awork-User-IDs (je max. 100 Einträge)',
+          message:
+            'reihenfolge muss null oder eine Liste von awork-User-IDs sein, ausgeblendet eine Liste von awork-User-IDs (je max. 100 Einträge); filter darf fehlen, sonst müssen projektArten/faelligkeit/status/arbeitsarten Listen kurzer Zeichenketten, projekt null oder Zeichenkette und nurPrio/nurLaufendeProjekte Wahrheitswerte sein',
         });
         return;
       }
+      // Ohne mitgeschicktes filter-Feld bleibt der gespeicherte Filter stehen
+      // — sonst löschte ein PUT im alten Format (Alt-Tab, s. parseFilter)
+      // die Auswahl aus einem anderen Tab.
+      const einstellungen: TeamboardEinstellungen = {
+        reihenfolge: gesendet.reihenfolge,
+        ausgeblendet: gesendet.ausgeblendet,
+        filter: gesendet.filter ?? deps.einstellungen.get(auth.user!.id).filter,
+      };
       deps.einstellungen.set(auth.user!.id, einstellungen);
       res.json(einstellungen);
     } catch (e: any) {
@@ -400,7 +503,8 @@ export function createTeamboardRouter(deps: Deps): Router {
 
 interface PageDeps {
   ladeBoard: BoardLader;
-  renderSeite: (stand: BoardStand, betrachter: Betrachter | null) => string;
+  ladeProjekte: ProjekteLader;
+  renderSeite: (stand: BoardStand, betrachter: Betrachter | null, projekte: ProjekteProId) => string;
   pageAuth: RequestHandler;
 }
 
@@ -427,7 +531,8 @@ export function createTeamboardPageRouter(deps: PageDeps): Router {
       // renderSeite aufrufen, bevor Headers geschrieben werden, damit ein
       // Fehler dort noch abgefangen werden kann, ohne dass eine teilweise
       // geschriebene Response vorliegt.
-      const html = deps.renderSeite(stand, betrachterAus(getAuth(res)));
+      const projekte = await projekteZumBoard(deps.ladeProjekte, stand.board);
+      const html = deps.renderSeite(stand, betrachterAus(getAuth(res)), projekte);
       res.set('Cache-Control', 'no-store').status(200).type('text/html; charset=utf-8').send(html);
     } catch (fehler) {
       // Fehler bei renderSeite oder sonst etwas im Handler — nie das
