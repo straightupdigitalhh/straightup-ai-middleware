@@ -2,7 +2,7 @@ name: Build, Push & Deploy
 
 on:
   push:
-    branches: [main, stufe3-erledigen]
+    branches: [main, facelift]
 
 env:
   REGISTRY: ghcr.io
@@ -59,7 +59,7 @@ jobs:
         with:
           context: .
           # Nur auf main wird tatsächlich gepusht: ein Branch-Lauf (z. B.
-          # stufe3-erledigen vor dem Merge) baut nur zur Verifikation, damit
+          # facelift vor dem Merge) baut nur zur Verifikation, damit
           # er nicht das produktive :latest überschreibt und ein
           # Pull-and-recreate der Produktion ungemergten Code auslöst.
           push: ${{ github.ref == 'refs/heads/main' }}
