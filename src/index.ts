@@ -29,6 +29,7 @@ import { createTimetrackingRouter } from './routes/timetracking.js';
 import { createTeamboardRouter, createTeamboardPageRouter } from './routes/teamboard.js';
 import { erstelleBoardLader } from './services/teamboard/daten.js';
 import { erstelleZeitenLader } from './services/teamboard/zeiten.js';
+import { erstelleProjekteLader } from './services/teamboard/projekte.js';
 import { erstelleErledigenDienst } from './services/teamboard/erledigen.js';
 import { erstelleKommentarAutomation, erstelleLaufAufraeumAutomation } from './services/teamboard/kommentar-automation.js';
 import { TeamboardEinstellungenStore } from './core/teamboard-einstellungen.js';
@@ -108,6 +109,11 @@ const aworkClient = new AworkClient(process.env.AWORK_API_TOKEN!);
 
 const teamboardBoardLader = erstelleBoardLader({ client: aworkClient, ttlMs: 10_000 });
 const teamboardZeitenLader = erstelleZeitenLader({ awork: aworkClient, ttlMs: 10_000 });
+// Projekt-Stammdaten für die Filterleiste: eigener Lader, eigene TTL. 5
+// Minuten statt 10 Sekunden — Projekt-Art und Projekt-Status ändern sich
+// nicht im Poll-Takt, der Abruf holt aber alle Projekte des Workspaces
+// (eine awork-Anfrage je 5 Minuten, unabhängig von der Zahl offener Tabs).
+const teamboardProjekteLader = erstelleProjekteLader({ awork: aworkClient, ttlMs: 5 * 60_000 });
 const teamboardEinstellungen = new TeamboardEinstellungenStore(db);
 const teamboardErledigenDienst = erstelleErledigenDienst({
   awork: aworkClient,
@@ -245,6 +251,7 @@ app.use(createTimetrackingRouter({ awork: aworkClient })); // /api/timetracking/
 app.use(createTeamboardRouter({
   ladeBoard: teamboardBoardLader,
   ladeZeiten: teamboardZeitenLader,
+  ladeProjekte: teamboardProjekteLader,
   ladeNutzerBild: (userId) => aworkClient.getUserImage(userId),
   einstellungen: teamboardEinstellungen,
   erledigenDienst: teamboardErledigenDienst,
@@ -263,6 +270,7 @@ app.use(createTeamboardRouter({
 // selbst definiert den vollen Pfad /teamboard (siehe routes/teamboard.ts).
 app.use(createTeamboardPageRouter({
   ladeBoard: teamboardBoardLader,
+  ladeProjekte: teamboardProjekteLader,
   renderSeite,
   pageAuth: createPageAuth(sessions, '/app/'),
 }));

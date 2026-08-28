@@ -51,7 +51,7 @@ function stand(teile?: Partial<BoardStand>): BoardStand {
 
 describe("renderSeite", () => {
   it("bettet die Board-Daten als JSON ein, ohne dass '<' im Skript landet", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('id="board-daten"');
     expect(html).toContain("Lea Stöber");
     // "</script>" im Aufgabennamen darf das Datenskript nicht beenden können.
@@ -82,8 +82,15 @@ describe("renderSeite", () => {
     expect(html.split("</script>").length - 1).toBe(2);
   });
 
+  it("bettet die Projekt-Stammdaten der Board-Projekte als projekte ins Seiten-JSON ein (Filterleiste)", () => {
+    const html = renderSeite(stand(), null, {
+      "proj-intern": { art: "straightup Projekt", status: "progress" },
+    });
+    expect(html).toContain('"projekte":{"proj-intern":{"art":"straightup Projekt","status":"progress"}}');
+  });
+
   it("ist ein vollständiges HTML-Dokument mit Titel und Client-Skript", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("<!doctype html>");
     expect(html).toContain("<title>Teamboard</title>");
     expect(html).toContain("/api/teamboard/board"); // Nachlade-Logik ist verdrahtet
@@ -94,7 +101,7 @@ describe("renderSeite", () => {
   // Stolperdrähte gegen ein versehentliches Zurückdrehen des Fixes, kein
   // Beleg für das tatsächliche Laufzeitverhalten im Browser.
   it("befüllt die Uhren in zeichne() selbst — kein leerer Zeit-Span bis zum nächsten Sekundentick (Fix-Runde)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     // zeichne() baut die Zeit-Spans leer auf; erst ticke() setzt ihren Text.
     // Jeder Aufrufer, der das vergisst, lässt das größte Element der Lane
     // kurz leer blinken (10-s-Poll, /zeiten, /einstellungen, Ausblenden,
@@ -112,7 +119,7 @@ describe("renderSeite", () => {
   });
 
   it("merkt sich Scrollposition und aufgeklappte Lanes über einen Neuaufbau hinweg", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("aufgeklappteLanes");
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     expect(zeichneBlock).toContain("wurzel.scrollLeft");
@@ -122,7 +129,7 @@ describe("renderSeite", () => {
   it("kapselt den Daten-Bootstrap in try/catch mit sichtbarer Fehlermeldung statt weißer Seite (P2)", () => {
     // DOM-Verhalten selbst läuft in dieser Suite nicht (kein jsdom) — reiner
     // Text-Tripwire, dass die Absicherung im Quelltext steht.
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const bootstrapBlock = html.split("var stand;")[1]?.split("var empfangenUm")[0];
     expect(bootstrapBlock).toContain("try {");
     expect(bootstrapBlock).toContain("} catch (fehler) {");
@@ -131,12 +138,12 @@ describe("renderSeite", () => {
   });
 
   it("rendert 'pausiert' als Chip statt als reine Textzeile (P4)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('el("span", "chip pausiert-chip", "pausiert")');
   });
 
   it("hebt die Timer-Karte als eigene Bühne ab: --aktiv-grund-Fläche mit Radius 16, 30px-Uhr mit Puls-Ring, pausiert gedämpft ohne Puls (Facelift, 28.08.2026)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     // Den Laufend-Zustand trägt jetzt die Timer-Karte selbst (Fläche +
     // Puls-Ring) — der frühere .lane.aktiv-Rahmen um die ganze Spalte und
     // die linke Akzentkante sind ersatzlos entfallen.
@@ -159,7 +166,7 @@ describe("renderSeite", () => {
   });
 
   it("zeigt vor dem Namen ein rundes Avatar-Bild aus der Avatar-Proxy-Route mit Initialen-Fallback bei Ladefehler (C)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     // same-origin — der Browser schickt die Basic-Auth-Credentials automatisch mit.
     expect(html).toContain('bild.src = "/api/teamboard/avatar/" + lane.userId');
     expect(html).toContain('bild.className = "avatar"');
@@ -170,7 +177,7 @@ describe("renderSeite", () => {
   });
 
   it("hält alle Lanes exakt gleich breit: min-width: 0 gegen die flex-min-width:auto-Falle, lange Texte brechen statt zu dehnen (Folgeauftrag 2, 26.08.2026)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     // .lane ist Flex-Item mit fester flex-basis (300px) in #lanes; ohne
     // min-width: 0 dehnt ein langer, nicht umbrechbarer Inhalt (automatic
     // minimum size) genau die Lane, in der er vorkommt, über die Basis
@@ -192,7 +199,7 @@ describe("renderSeite", () => {
   });
 
   it("fasst den Lane-Kopf als Kopfbox: Avatar (Bild und Initialen-Kreis gleich groß) auf 40px, Name 15px/600, alles auf --chip-Fläche mit Radius 12 (Facelift)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     // .avatar-initialen trägt im Markup weiterhin zusätzlich die Klasse
     // "avatar" (el("div", "avatar avatar-initialen", ...)) — Bild und
     // Initialen-Kreis übernehmen die Größe also automatisch aus derselben
@@ -207,7 +214,7 @@ describe("renderSeite", () => {
   it("stoppt beim Nachladen sofort per Reload, wenn die Session abgelaufen ist (401), statt den 10-s-Poll in die Brute-Force-Bremse zählen zu lassen (Stufe 2, Task 8; Takt seit Stufe 3, Task 9)", () => {
     // Text-Tripwire (kein jsdom in dieser Suite): das gerenderte HTML muss
     // sowohl den neuen API-Pfad als auch den 401-Reload-Zweig enthalten.
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('fetch("/api/teamboard/board"');
     const nachladenBlock = html.split("function nachladen()")[1]?.split("\n  }")[0];
     expect(nachladenBlock).toContain("res.status === 401");
@@ -215,7 +222,7 @@ describe("renderSeite", () => {
   });
 
   it("pollt alle 10 statt 30 Sekunden nach (Stufe 3, Task 9) — Client-Takt und Server-TTL gehören zusammen, sonst holt der Client nur häufiger denselben Cache-Stand", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("setInterval(nachladen, 10000);");
     expect(html).not.toContain("30000");
   });
@@ -224,7 +231,7 @@ describe("renderSeite", () => {
     // Text-Tripwire (kein jsdom in dieser Suite): derselbe nachladen()-Pfad
     // wie das Intervall, samt seiner 401-Behandlung — kein eigener
     // Fetch-Pfad daneben.
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const sichtbarkeitBlock = html.split('addEventListener("visibilitychange"')[1]?.split("});")[0];
     expect(sichtbarkeitBlock).toBeDefined();
     expect(sichtbarkeitBlock).toContain('document.visibilityState === "visible"');
@@ -236,7 +243,7 @@ describe("renderSeite", () => {
   // Laufzeitverhalten im Browser.
 
   it("lädt nach jedem Zeichen-Zyklus (Start + 10-s-Nachladen) zusätzlich die Zeitsummen, mit derselben 401-Reload-Behandlung wie beim Board-Fetch (Task 9; Takt seit Stufe 3, Task 9)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('fetch("/api/teamboard/zeiten"');
     const ladeZeitenBlock = html.split("function ladeZeiten()")[1]?.split("\n  }")[0];
     expect(ladeZeitenBlock).toContain("res.status === 401");
@@ -249,7 +256,7 @@ describe("renderSeite", () => {
   });
 
   it("rendert das Instrumentenbrett (HEUTE/GESTERN/WOCHE) in der Kopfbox nur für gelieferte IDs — sonst endet die Kopfbox nach der Namenszeile (Task 9, Markup aus dem Facelift)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     // Guard: nur rendern, wenn für diese userId tatsächlich Zeiten geliefert
     // wurden — keine leeren Felder und keine Nullen für fremde Lanes.
@@ -265,7 +272,7 @@ describe("renderSeite", () => {
   });
 
   it("wendet in zeichne() erst den Projekt-Filter an und zeichnet danach (Task 9)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     const filterPos = zeichneBlock!.indexOf("wendeProjektFilterAn(");
     const forEachPos = zeichneBlock!.indexOf(".forEach(function (lane)");
@@ -275,7 +282,7 @@ describe("renderSeite", () => {
   });
 
   it("zeigt bei hinweis === 'kein_mapping' einmal im Kopfbereich den dezenten Hinweistext auf fehlendes awork-Mapping (Spec §5, Task 9)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain(
       "Zeiten: kein awork-Mapping hinterlegt — ein Admin kann es in der Nutzerverwaltung verknüpfen"
     );
@@ -285,7 +292,7 @@ describe("renderSeite", () => {
   });
 
   it("baut den Projekt-Filter als <select> im Kopfbereich per createElement aus projekteAusBoard, Auswahl in Client-Variable ohne Speichern (Task 9, Spec §6)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('id="projekt-filter"');
     expect(html).toContain('projekteAusBoard(stand.board)');
     expect(html).toContain('document.createElement("option")');
@@ -301,7 +308,7 @@ describe("renderSeite", () => {
   });
 
   it("zeigt den aktiven Filter als Chip mit 'Filter aufheben'-Button per addEventListener, keine Inline-Handler-Attribute (Task 9)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("Filter aufheben");
     expect(html).toContain('id="projekt-chip"');
     // CSP: kein onclick=... im ausgelieferten HTML.
@@ -313,7 +320,7 @@ describe("renderSeite", () => {
   // gegen den Quelltext des eingebetteten Client-Skripts.
 
   it("lädt die Einstellungen beim Start per GET, mit derselben 401-Reload-Behandlung wie Board/Zeiten (Task 10)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('fetch("/api/teamboard/einstellungen"');
     const ladeEinstellungenBlock = html.split("function ladeEinstellungen()")[1]?.split("\n  }")[0];
     expect(ladeEinstellungenBlock).toContain("res.status === 401");
@@ -323,7 +330,7 @@ describe("renderSeite", () => {
   });
 
   it("macht die Kopfbox per draggable=\"true\" ziehbar und verdrahtet dragstart/dragover/drop NUR per addEventListener (CSP script-src-attr 'none', Task 10; Träger seit dem Facelift die Kopfbox)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('var kopf = el("header", "kopfbox");');
     expect(html).toContain('kopf.setAttribute("draggable", "true")');
     expect(html).toContain('addEventListener("dragstart"');
@@ -335,7 +342,7 @@ describe("renderSeite", () => {
   });
 
   it("speichert nach dem Drop die neue Reihenfolge per PUT und wendet sie lokal an (Task 10)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('method: "PUT"');
     const speichernBlock = html.split("function speichereEinstellungen()")[1]?.split("\n  }")[0];
     expect(speichernBlock).toContain('fetch("/api/teamboard/einstellungen"');
@@ -346,13 +353,13 @@ describe("renderSeite", () => {
   });
 
   it("trägt je Lane-Kopf ein Ausblenden-Steuerelement (kleines ×), das die Lane in die Ausgeblendet-Liste verschiebt (Task 10)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('el("button", "ausblenden-btn", "×")');
     expect(html).toContain("function blendeAus(");
   });
 
   it("baut den 'N ausgeblendet'-Chip mit einer per createElement erzeugten Liste samt 'einblenden'-Buttons (Task 10)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('id="ausgeblendet-chip"');
     expect(html).toContain('id="ausgeblendet-liste"');
     expect(html).toContain("ausgeblendet");
@@ -363,7 +370,7 @@ describe("renderSeite", () => {
   });
 
   it("wendet in zeichne() erst wendeEinstellungenAn und danach wendeProjektFilterAn an, bevor gezeichnet wird (Task 10)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     const einstellungenPos = zeichneBlock!.indexOf("wendeEinstellungenAn(");
     const filterPos = zeichneBlock!.indexOf("wendeProjektFilterAn(");
@@ -380,7 +387,7 @@ describe("renderSeite", () => {
   // des ausgelieferten Dokuments (kein jsdom).
 
   it("stellt Kopfbox, Timer und Karten als eigenständige Elemente auf --grund — die Lane hat keine eigene Umrandungs-Box mehr (Facelift)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain(".lane { flex: 0 0 300px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }");
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     expect(zeichneBlock).toContain('var box = el("section", "lane");');
@@ -396,7 +403,7 @@ describe("renderSeite", () => {
   });
 
   it("hängt den Karten-Wrapper nur an, wenn er Karten bekommt — leer erzeugte er über den Flex-gap 14px toten Abstand am Spaltenfuß (Fix-Runde)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     expect(zeichneBlock).toContain("if (lane.aufgaben.length > 0) box.appendChild(liste);");
     // Der Wrapper selbst bleibt: an ihm hängt das Aufklappen von
@@ -407,7 +414,7 @@ describe("renderSeite", () => {
   });
 
   it("setzt die Status-Badge ÜBER den Aufgabentitel, nie daneben — der Titel bekommt die volle Breite (Facelift)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     const badgePos = zeichneBlock!.indexOf('"badge" + (a.statusTyp === "progress" ? " badge-progress" : "")');
     const titelPos = zeichneBlock!.indexOf('el("h3", "aufgabe-titel", a.name)');
@@ -426,7 +433,7 @@ describe("renderSeite", () => {
   });
 
   it("zeigt die Fälligkeit als Datums-Chip MIT dem Wort 'fällig'; überfällig trägt allein die Warnfarbe (Fix-Runde)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     expect(zeichneBlock).toContain('"chip-datum" + (a.ueberfaellig ? " chip-warn" : "")');
     // Ohne "fällig" stünde neben "KAEF-19 · käfer Relaunch" nur ein nacktes
@@ -441,7 +448,7 @@ describe("renderSeite", () => {
   });
 
   it("behält die Uhr-Attribute am Zeit-Element der neuen Timer-Karte — ticke() findet sie unverändert über [data-uhr] (Facelift)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     expect(zeichneBlock).toContain('var zahl = el("span", "timer-zeit", "");');
     expect(zeichneBlock).toContain('zahl.setAttribute("data-uhr", String(lane.timer.sekunden));');
@@ -452,7 +459,7 @@ describe("renderSeite", () => {
   });
 
   it("trägt die Wortmarke im Kopfbereich (34px, currentColor) und ein data:-Favicon im Head — ohne zusätzlichen Script-Block und ohne CSP-Änderung (Facelift)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     // Favicon im Kopf des Dokuments, vor <body>. Die CSP erlaubt data: für
     // Bilder bereits (index.ts, imgSrc) — daran ändert sich nichts.
     const dokumentKopf = html.split("<body>")[0];
@@ -485,7 +492,7 @@ describe("renderSeite", () => {
   // Tripwires gegen den Quelltext des ausgelieferten Dokuments.
 
   it("legt den Panel-Container als Geschwister von #lanes an, damit ihn das Leeren von #lanes in zeichne() nicht mitnimmt (Task 7)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('<div id="lanes"></div>\n<div id="panel" hidden></div>');
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     // Der Neuaufbau leert weiterhin nur #lanes; das Panel liegt außerhalb
@@ -495,7 +502,7 @@ describe("renderSeite", () => {
   });
 
   it("hält den Panel-Zustand außerhalb von zeichne() und befüllt ein offenes Panel nach jedem Neuzeichnen aus den frischen Board-Daten (Task 7)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const vorZeichne = html.split("function zeichne()")[0];
     expect(vorZeichne).toContain("var offeneAufgabeId = null;");
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
@@ -509,7 +516,7 @@ describe("renderSeite", () => {
   });
 
   it("bindet den Klick auf die Aufgabenkarte per addEventListener, noch bevor die Karte angehängt wird (Task 7)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     const klickPos = zeichneBlock!.indexOf('k.addEventListener("click"');
     const anhaengenPos = zeichneBlock!.indexOf("liste.appendChild(k)");
@@ -522,7 +529,7 @@ describe("renderSeite", () => {
   });
 
   it("schließt das Panel per Knopf und per Escape (Task 7)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain('el("button", "panel-schliessen", "×")');
     expect(html).toContain("function schliessePanel()");
     const escapeBlock = html.split('document.addEventListener("keydown"')[1]?.split("});")[0];
@@ -531,7 +538,7 @@ describe("renderSeite", () => {
   });
 
   it("lässt Escape wirkungslos, solange ein Undo-Fenster läuft — der Schließen-Knopf schließt weiterhin (M3)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const escapeBlock = html.split('document.addEventListener("keydown"')[1]?.split("});")[0];
     // Genau die Bedingung aus dem Befund: laufender Vorgang mit klickbarem
     // Rückgängig-Knopf.
@@ -544,7 +551,7 @@ describe("renderSeite", () => {
   });
 
   it("dockt das Panel rechts über die volle Höhe an, über dem Board, mit Übergang beim Einfahren und voller Breite auf schmalen Schirmen — Farben nur über die vorhandenen Tokens (Task 7)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const panelCss = html.split("#panel {")[1]?.split("}")[0];
     expect(panelCss).toContain("position: fixed");
     expect(panelCss).toContain("right: 0");
@@ -566,18 +573,18 @@ describe("renderSeite", () => {
   // Tripwires gegen den Quelltext des ausgelieferten Dokuments.
 
   it("hängt den Betrachter (eigene awork-ID, Admin-Rolle) ins eingebettete JSON — der für alle gleiche Board-Cache trägt ihn nicht (Task 8)", () => {
-    expect(renderSeite(stand(), { aworkUserId: "u-lea", istAdmin: false })).toContain(
+    expect(renderSeite(stand(), { aworkUserId: "u-lea", istAdmin: false }, {})).toContain(
       '"betrachter":{"aworkUserId":"u-lea","istAdmin":false}'
     );
-    expect(renderSeite(stand(), { aworkUserId: null, istAdmin: true })).toContain(
+    expect(renderSeite(stand(), { aworkUserId: null, istAdmin: true }, {})).toContain(
       '"betrachter":{"aworkUserId":null,"istAdmin":true}'
     );
     // via api-key gibt es keine Nutzeridentität — dann auch keinen Knopf.
-    expect(renderSeite(stand(), null)).toContain('"betrachter":null');
+    expect(renderSeite(stand(), null, {})).toContain('"betrachter":null');
   });
 
   it("entscheidet den Erledigt-Knopf im Panel über darfErledigen mit dem Betrachter aus dem Stand und zeigt sonst einen Hinweistext (Task 8)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const bereich = html.split("function baueErledigenBereich(")[1]?.split("\n  }")[0];
     expect(bereich).toContain("stand.betrachter");
     expect(bereich).toContain("darfErledigen(");
@@ -593,7 +600,7 @@ describe("renderSeite", () => {
   });
 
   it("meldet den Klick an POST /erledigen, zeigt Fehler als Servertext im Panel und behandelt 401 wie der Board-Fetch (Task 8)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const block = html.split("function erledige(")[1]?.split("\n  }")[0];
     expect(block).toContain('"/api/teamboard/erledigen"');
     expect(block).toContain('method: "POST"');
@@ -606,7 +613,7 @@ describe("renderSeite", () => {
   });
 
   it("erklärt einen Netzwerkfehler beim Erledigen im Panel und zeichnet neu, statt den Knopf stumm deaktiviert stehen zu lassen (M4)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const block = html.split("function erledige(")[1]?.split("\n  }")[0];
     const catchBlock = block?.split(".catch(function (fehler)")[1];
     expect(catchBlock).toBeDefined();
@@ -616,7 +623,7 @@ describe("renderSeite", () => {
   });
 
   it("führt den Countdown mit undoSekunden aus der Serverantwort — die 20 steht nirgends im Client (Task 8)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const erledigeBlock = html.split("function erledige(")[1]?.split("\n  }")[0];
     expect(erledigeBlock).toContain("undoSekunden");
     const tickerBlock = html.split("function tickeUndo()")[1]?.split("\n  }")[0];
@@ -628,7 +635,7 @@ describe("renderSeite", () => {
   });
 
   it("ruft mit dem Rückgängig-Knopf POST /rueckgaengig mit der vorgangId aus der Erledigen-Antwort (Task 8)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const block = html.split("function macheRueckgaengig()")[1]?.split("\n  }")[0];
     expect(block).toContain('"/api/teamboard/rueckgaengig"');
     expect(block).toContain("vorgangId");
@@ -638,7 +645,7 @@ describe("renderSeite", () => {
   });
 
   it("hält den Erledigen-Zustand außerhalb von zeichne() und lässt das Panel im Undo-Fenster stehen, obwohl das nachgeladene Board die Aufgabe nicht mehr kennt (Task 8)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const vorZeichne = html.split("function zeichne()")[0];
     expect(vorZeichne).toContain("var erledigt = null;");
     const fuelleBlock = html.split("function fuellePanel()")[1]?.split("\n  }")[0];
@@ -649,7 +656,7 @@ describe("renderSeite", () => {
   // ── Task 8, Fix-Runde 1 ───────────────────────────────────────────────
 
   it("gibt den Erledigen-Zustand beim Schließen und beim Öffnen einer anderen Aufgabe frei — er darf die Panel-Ansicht nicht überleben (Fix-Runde 1)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     // Scheitert /rueckgaengig (fenster_abgelaufen, schon_rueckgaengig,
     // nicht_gewechselt), bleibt die Kartenkopie liegen: beendeUndo() wird auf
     // diesem Pfad nie erreicht. Ohne Freigabe hier fiele fuellePanel()
@@ -667,7 +674,7 @@ describe("renderSeite", () => {
   });
 
   it("zeigt für die soeben erledigte Karte nie wieder einen Erledigt-Knopf — nach Fensterablauf oder gescheitertem Undo bleibt es beim Text (Fix-Runde 1)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const bereich = html.split("function baueErledigenBereich(")[1]?.split("\n  }")[0];
     // Der frühe Ausstieg hängt an der Kartenzugehörigkeit, NICHT an der
     // vorgangId — sonst rendert der Fehlerpfad wieder einen aktiven Knopf
@@ -677,12 +684,12 @@ describe("renderSeite", () => {
   });
 
   it("pinnt die Argumentreihenfolge am Aufrufort von darfErledigen — vertauschte Argumente gäben jedem zugeordneten Nutzer Admin-Rechte in der Oberfläche (Fix-Runde 1)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("darfErledigen(aufgabe, eigeneAworkId, istAdmin)");
   });
 
   it("sperrt den Erledigt-Knopf beim ersten Klick — ein zweiter POST bekäme laeuft_bereits und schriebe seinen Fehlertext über den laufenden Countdown (Fix-Runde 1)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const bereich = html.split("function baueErledigenBereich(")[1]?.split("\n  }")[0];
     expect(bereich).toContain("knopf.disabled = erledigenLaeuft;");
     expect(bereich).toContain("knopf.disabled = true;");
@@ -693,7 +700,7 @@ describe("renderSeite", () => {
   });
 
   it("sperrt den Rückgängig-Knopf beim ersten Klick — dasselbe Flag-Muster wie beim Erledigt-Knopf (Ledger)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const bereich = html.split("function baueErledigenBereich(")[1]?.split("\n  }")[0];
     expect(bereich).toContain("zurueck.disabled = rueckgaengigLaeuft;");
     expect(bereich).toContain("zurueck.disabled = true;");
@@ -707,7 +714,7 @@ describe("renderSeite", () => {
   });
 
   it("startet den Undo-Countdown eine Sekunde unter undoSekunden — die Roundtrip-Zeit ist bei Antworteingang schon vergangen (Ledger)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     const block = html.split("function erledige(")[1]?.split("\n  }")[0];
     expect(block).toContain("restSekunden: antwort.koerper.undoSekunden - 1,");
   });
@@ -1082,7 +1089,7 @@ describe("darfErledigen (P1 — wer den Erledigt-Knopf sieht, Task 8)", () => {
 
 describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
   it("enthält die Funktionsquelltexte von uhrText, datumKurz, bannerText und initialen (Einbettung nicht verloren)", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("function uhrText(");
     expect(html).toContain("function datumKurz(");
     expect(html).toContain("function bannerText(");
@@ -1097,7 +1104,7 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
   });
 
   it("enthält auch formatiereZeit, zeitFelder, projekteAusBoard und wendeProjektFilterAn (Task 9, zeitFelder seit dem Facelift), weiterhin ohne __name(", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("function formatiereZeit(");
     expect(html).toContain("function zeitFelder(");
     // zeitZeile ist im Facelift durch zeitFelder ersetzt — die
@@ -1112,14 +1119,14 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
   });
 
   it("enthält auch wendeEinstellungenAn (Task 10), weiterhin ohne __name( und ohne dritten Script-Block", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("function wendeEinstellungenAn(");
     expect(html).not.toContain("__name(");
     expect(html.split("</script>").length - 1).toBe(2);
   });
 
   it("enthält auch panelFelder (Task 7) — ohne die Einbettung gäbe es die Funktion im Browser gar nicht, weiterhin ohne __name(, ohne dritten Script-Block und ohne innerHTML", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("function panelFelder(");
     expect(html).not.toContain("__name(");
     expect(html.split("</script>").length - 1).toBe(2);
@@ -1127,7 +1134,7 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
   });
 
   it("enthält auch darfErledigen (Task 8) — ohne die Einbettung gäbe es die Funktion im Browser gar nicht, weiterhin ohne __name(, ohne dritten Script-Block und ohne innerHTML", () => {
-    const html = renderSeite(stand(), null);
+    const html = renderSeite(stand(), null, {});
     expect(html).toContain("function darfErledigen(");
     expect(html).not.toContain("__name(");
     expect(html.split("</script>").length - 1).toBe(2);
@@ -1199,6 +1206,7 @@ function makeRealApp() {
   // (deps.pageAuth als Route-Middleware), nicht app-weit.
   app.use(createTeamboardPageRouter({
     ladeBoard: async () => boardStandFixture,
+    ladeProjekte: async () => ({}),
     renderSeite,
     pageAuth: createPageAuth(sessions, "/app/"),
   }));

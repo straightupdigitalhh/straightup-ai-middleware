@@ -3,6 +3,7 @@ import { getAuth, requireAdmin, type AuthContext } from '../services/auth.js';
 import { clientErrorMessage } from '../services/errors.js';
 import type { BoardLader, BoardStand } from '../services/teamboard/daten.js';
 import type { ZeitenProNutzer } from '../services/teamboard/zeiten.js';
+import { projekteFuerBoard, type ProjekteLader, type ProjekteProId } from '../services/teamboard/projekte.js';
 import type { ErledigenFehler, RueckgaengigFehler } from '../services/teamboard/erledigen.js';
 import type { Betrachter } from '../services/teamboard/seite.js';
 import type { TeamboardEinstellungen, TeamboardEinstellungenStore } from '../core/teamboard-einstellungen.js';
@@ -21,6 +22,7 @@ interface ErledigenDienst {
 interface Deps {
   ladeBoard: BoardLader;
   ladeZeiten: () => Promise<ZeitenProNutzer>;
+  ladeProjekte: ProjekteLader;
   ladeNutzerBild: (userId: string) => Promise<{ typ: string; bytes: Buffer } | null>;
   einstellungen: TeamboardEinstellungenStore;
   erledigenDienst: ErledigenDienst;
@@ -103,6 +105,31 @@ function parseEinstellungen(body: unknown): TeamboardEinstellungen | null {
 function betrachterAus(auth: AuthContext | undefined): Betrachter | null {
   if (!auth || auth.via !== 'session' || !auth.user) return null;
   return { aworkUserId: auth.user.aworkUserId, istAdmin: auth.role === 'admin' };
+}
+
+// ─── Projekt-Stammdaten für die Filterleiste ──────────────────────
+//
+// Getrennter Lader mit eigener TTL (5 min, s. services/teamboard/projekte.ts)
+// — er hängt NICHT am Board-Cache. Sein Wurf (awork war noch nie erreichbar)
+// wird hier abgefangen: die Filterleiste ist Komfort und darf weder die
+// /board-Antwort noch die gerenderte Seite kosten. Nach einem ersten Erfolg
+// liefert der Lader von sich aus den letzten Stand (stale) und kommt hier
+// gar nicht mehr in den catch-Zweig.
+
+async function projekteZumBoard(
+  ladeProjekte: ProjekteLader,
+  board: BoardStand['board'],
+): Promise<ProjekteProId> {
+  try {
+    return projekteFuerBoard(board, await ladeProjekte());
+  } catch (fehler) {
+    // Nur die Meldung loggen, nie das Fehlerobjekt (könnte den Token enthalten).
+    console.error(
+      'teamboard: Projekt-Stammdaten laden fehlgeschlagen —',
+      fehler instanceof Error ? fehler.message : String(fehler),
+    );
+    return {};
+  }
 }
 
 /**
@@ -199,12 +226,13 @@ export function createTeamboardRouter(deps: Deps): Router {
   router.get('/api/teamboard/board', async (_req: Request, res: Response) => {
     try {
       const stand = await deps.ladeBoard();
+      const projekte = await projekteZumBoard(deps.ladeProjekte, stand.board);
       // private: die Antwort trägt mit betrachter die Identität des
       // Aufrufers. no-store zusätzlich, weil sich der Board-Stand alle 10 s
       // ändert und der Client ohnehin in diesem Takt neu fragt.
       res
         .set('Cache-Control', 'private, no-store')
-        .json({ ...stand, betrachter: betrachterAus(getAuth(res)) });
+        .json({ ...stand, betrachter: betrachterAus(getAuth(res)), projekte });
     } catch (e: any) {
       console.error(`❌ teamboard: Board laden fehlgeschlagen: ${e?.message ?? e}`);
       res.status(502).json({ error: 'awork_unreachable', message: clientErrorMessage(e) });
@@ -400,7 +428,8 @@ export function createTeamboardRouter(deps: Deps): Router {
 
 interface PageDeps {
   ladeBoard: BoardLader;
-  renderSeite: (stand: BoardStand, betrachter: Betrachter | null) => string;
+  ladeProjekte: ProjekteLader;
+  renderSeite: (stand: BoardStand, betrachter: Betrachter | null, projekte: ProjekteProId) => string;
   pageAuth: RequestHandler;
 }
 
@@ -427,7 +456,8 @@ export function createTeamboardPageRouter(deps: PageDeps): Router {
       // renderSeite aufrufen, bevor Headers geschrieben werden, damit ein
       // Fehler dort noch abgefangen werden kann, ohne dass eine teilweise
       // geschriebene Response vorliegt.
-      const html = deps.renderSeite(stand, betrachterAus(getAuth(res)));
+      const projekte = await projekteZumBoard(deps.ladeProjekte, stand.board);
+      const html = deps.renderSeite(stand, betrachterAus(getAuth(res)), projekte);
       res.set('Cache-Control', 'no-store').status(200).type('text/html; charset=utf-8').send(html);
     } catch (fehler) {
       // Fehler bei renderSeite oder sonst etwas im Handler — nie das

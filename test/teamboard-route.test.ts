@@ -28,6 +28,57 @@ const boardStandFixture = {
   alterSekunden: 0,
 };
 
+/** Board mit je einem Projekt an einer Karte und an einem Timer (Filterleiste). */
+const boardMitProjektenFixture = {
+  board: {
+    stand: '2026-08-28T10:00:00.000Z',
+    lanes: [
+      {
+        userId: 'u-lea',
+        name: 'Lea Stöber',
+        timer: null,
+        aufgaben: [
+          {
+            id: 't-1',
+            name: 'Aufgabe',
+            kennung: null,
+            projektName: 'Kunde X',
+            projektId: 'proj-karte',
+            statusName: 'Offen',
+            statusTyp: 'todo',
+            faelligAm: null,
+            istPrio: false,
+            istWiederkehrend: false,
+            arbeitsart: 'Projektarbeit',
+            assigneeIds: ['u-lea'],
+            ueberfaellig: false,
+          },
+        ],
+      },
+      {
+        userId: 'u-max',
+        name: 'Max Mendel',
+        timer: {
+          aufgabenName: 'Timer-Aufgabe',
+          aufgabenKennung: null,
+          projektName: 'Kunde Y',
+          projektId: 'proj-timer',
+          sekunden: 60,
+          pausiert: false,
+        },
+        aufgaben: [],
+      },
+    ],
+  },
+  alterSekunden: 0,
+};
+
+const alleProjekteFixture = {
+  'proj-karte': { art: 'Website-Support', status: 'progress' },
+  'proj-timer': { art: 'Website-Erstellung', status: 'closed' },
+  'proj-nie-im-board': { art: 'Vorlagen', status: 'not-started' },
+};
+
 const zeitenFixture: ZeitenProNutzer = {
   'u-lea': { heuteSekunden: 100, vortagSekunden: 200, wocheSekunden: 300 },
   'u-max': { heuteSekunden: 400, vortagSekunden: 500, wocheSekunden: 600 },
@@ -62,6 +113,7 @@ function makeDeps(overrides: Partial<Parameters<typeof createTeamboardRouter>[0]
   return {
     ladeBoard: vi.fn().mockResolvedValue(boardStandFixture),
     ladeZeiten: vi.fn().mockResolvedValue(zeitenFixture),
+    ladeProjekte: vi.fn().mockResolvedValue({}),
     ladeNutzerBild: vi.fn().mockResolvedValue(null),
     einstellungen: fakeEinstellungenStore(),
     erledigenDienst: fakeErledigenDienst(),
@@ -99,14 +151,16 @@ describe('GET /api/teamboard/board', () => {
     const deps = makeDeps();
     const res = await request(makeApp(deps, apiKeyAuth)).get('/api/teamboard/board');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ...boardStandFixture, betrachter: null });
+    // projekte kommt seit der Filterleiste dazu — hier leer, weil die Lanes
+    // der Fixture keine Projekte tragen.
+    expect(res.body).toEqual({ ...boardStandFixture, betrachter: null, projekte: {} });
   });
 
   it('via session ⇒ 200 + BoardStand-JSON samt Betrachter', async () => {
     const deps = makeDeps();
     const res = await request(makeApp(deps, adminSession)).get('/api/teamboard/board');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ...boardStandFixture, betrachter: { aworkUserId: null, istAdmin: true } });
+    expect(res.body).toEqual({ ...boardStandFixture, betrachter: { aworkUserId: null, istAdmin: true }, projekte: {} });
   });
 
   // Der Board-Cache ist für alle Betrachter derselbe (BoardStand trägt keine
@@ -131,6 +185,36 @@ describe('GET /api/teamboard/board', () => {
     const res = await request(makeApp(deps, memberAuth('u-lea'))).get('/api/teamboard/board');
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('private, no-store');
+  });
+
+  // ─── Projekt-Stammdaten in der Board-Antwort (Filterleiste) ──────
+
+  it('hängt projekte an — aber NUR die Projekte, die im Board vorkommen (Karten und Timer)', async () => {
+    const deps = makeDeps({
+      ladeBoard: vi.fn().mockResolvedValue(boardMitProjektenFixture),
+      ladeProjekte: vi.fn().mockResolvedValue(alleProjekteFixture),
+    });
+    const res = await request(makeApp(deps, adminSession)).get('/api/teamboard/board');
+    expect(res.status).toBe(200);
+    // proj-nie-im-board steht in den Stammdaten, aber auf keiner Karte und
+    // in keinem Timer — die Antwort geht alle 10 s über die Leitung.
+    expect(res.body.projekte).toEqual({
+      'proj-karte': { art: 'Website-Support', status: 'progress' },
+      'proj-timer': { art: 'Website-Erstellung', status: 'closed' },
+    });
+  });
+
+  it('liefert das Board auch dann aus, wenn die Projekt-Stammdaten nicht zu holen sind — projekte ist dann leer', async () => {
+    const deps = makeDeps({
+      ladeBoard: vi.fn().mockResolvedValue(boardMitProjektenFixture),
+      ladeProjekte: vi.fn().mockRejectedValue(new Error('awork API 500 bei projects')),
+    });
+    const res = await request(makeApp(deps, adminSession)).get('/api/teamboard/board');
+    // Die Filterleiste ist Komfort — sie darf die Board-Auslieferung nie
+    // blockieren (der Lader liefert sonst von sich aus den letzten Stand).
+    expect(res.status).toBe(200);
+    expect(res.body.board).toEqual(boardMitProjektenFixture.board);
+    expect(res.body.projekte).toEqual({});
   });
 
   it('werfender ladeBoard ⇒ 502 mit clientErrorMessage-Body, kein Stacktrace', async () => {
