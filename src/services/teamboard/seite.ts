@@ -768,14 +768,16 @@ ${LOGO_SVG}
         var meta = el("div", "aufgabe-meta");
         var unten = [a.kennung, a.projektName].filter(Boolean).join(" · ");
         if (unten) meta.appendChild(el("span", null, unten));
-        // Fälligkeit als Datums-Chip. Überfällig steht zusätzlich als Wort
-        // da: vorher trug das allein die rote Schrift, und Farbe allein ist
-        // auf dem Wandmonitor wie für Farbfehlsichtige keine Aussage.
+        // Fälligkeit als Datums-Chip. Das Wort "fällig" bleibt davor: neben
+        // "KAEF-19 · käfer Relaunch" ist ein nacktes Datum nicht als
+        // Fälligkeit erkennbar. Die Überfälligkeit trägt allein die
+        // Warnfarbe des Chips — wie im alten Layout; ein zusätzliches Wort
+        // wäre dasselbe Signal doppelt.
         if (a.faelligAm) {
           meta.appendChild(el(
             "span",
             "chip-datum" + (a.ueberfaellig ? " chip-warn" : ""),
-            datumKurz(a.faelligAm) + (a.ueberfaellig ? " · überfällig" : "")
+            "fällig " + datumKurz(a.faelligAm)
           ));
         }
         if (a.istPrio) meta.appendChild(el("span", "prio", "Prio"));

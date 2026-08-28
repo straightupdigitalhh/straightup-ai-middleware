@@ -414,13 +414,18 @@ describe("renderSeite", () => {
     expect(html).toContain(".prio { color: var(--warn); font-weight: 600; white-space: nowrap; }");
   });
 
-  it("zeigt die Fälligkeit als Datums-Chip, überfällig zusätzlich als Wort statt nur als Farbe (Facelift)", () => {
+  it("zeigt die Fälligkeit als Datums-Chip MIT dem Wort 'fällig'; überfällig trägt allein die Warnfarbe (Fix-Runde)", () => {
     const html = renderSeite(stand(), null);
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     expect(zeichneBlock).toContain('"chip-datum" + (a.ueberfaellig ? " chip-warn" : "")');
-    expect(zeichneBlock).toContain('datumKurz(a.faelligAm) + (a.ueberfaellig ? " · überfällig" : "")');
+    // Ohne "fällig" stünde neben "KAEF-19 · käfer Relaunch" nur ein nacktes
+    // Datum, dem man nicht ansieht, wofür es steht.
+    expect(zeichneBlock).toContain('"fällig " + datumKurz(a.faelligAm)');
+    // Die Überfälligkeit trägt allein das Rot des Chips — wie im alten
+    // Layout. Ein zusätzliches Wort im Chip wäre dasselbe Signal doppelt.
+    expect(zeichneBlock).not.toContain('" · überfällig"');
     expect(html).toContain(".chip-warn { background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); font-weight: 600; }");
-    // Die alte, nur farbige Fälligkeitsangabe gibt es nicht mehr.
+    // Die alte, aus zwei Spans gebaute Fälligkeitsangabe gibt es nicht mehr.
     expect(zeichneBlock).not.toContain('"faellig" + (a.ueberfaellig ? " rot" : "")');
   });
 
