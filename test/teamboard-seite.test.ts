@@ -9,7 +9,7 @@ import {
   bannerText,
   initialen,
   formatiereZeit,
-  zeitZeile,
+  zeitFelder,
   projekteAusBoard,
   wendeProjektFilterAn,
   wendeEinstellungenAn,
@@ -123,22 +123,27 @@ describe("renderSeite", () => {
     expect(html).toContain('el("span", "chip pausiert-chip", "pausiert")');
   });
 
-  it("hebt die Timer-Karte als Kopfstück der Lane ab: kräftigerer Akzent, größere Uhr, Trennlinie zur Aufgabenliste (Jans Wunsch nach der Abnahme, 26.08.2026)", () => {
+  it("hebt die Timer-Karte als eigene Bühne ab: --aktiv-grund-Fläche mit Radius 16, 30px-Uhr mit Puls-Ring, pausiert gedämpft ohne Puls (Facelift, 28.08.2026)", () => {
     const html = renderSeite(stand(), null);
-    // Kräftigerer Akzent: linke Akzentkante zusätzlich zum bestehenden
-    // flächigen Hintergrund/Rand (beide Farbschemata über die vorhandenen
-    // --aktiv/--aktiv-grund-Tokens, kein neuer Token nötig).
-    expect(html).toContain("border-left-width: 4px");
-    // Uhr größer (Soll: 26–28 px, bisher 20px).
-    expect(html).toContain("font-size: 27px");
-    // Pausiert-Zustand bleibt unverändert klar gedämpft (grau, Uhr steht).
-    expect(html).toContain(
-      '.timer.pausiert { background: var(--pause-grund); border-color: var(--linie); }'
-    );
-    // Sichtbare Trennung zur Aufgabenliste darunter: dezente Trennlinie als
-    // eigenes Markup-Element direkt nach der Timer-Karte.
-    expect(html).toContain(".trenner {");
-    expect(html).toContain('el("div", "trenner")');
+    // Den Laufend-Zustand trägt jetzt die Timer-Karte selbst (Fläche +
+    // Puls-Ring) — der frühere .lane.aktiv-Rahmen um die ganze Spalte und
+    // die linke Akzentkante sind ersatzlos entfallen.
+    expect(html).toContain("background: var(--aktiv-grund); border-radius: 16px;");
+    expect(html).toContain("font-size: 30px");
+    expect(html).toContain(".timer.pausiert { background: var(--pause-grund); }");
+    expect(html).not.toContain("border-left-width: 4px");
+    expect(html).not.toContain(".lane.aktiv");
+    // Puls-Ring nur, solange der Timer läuft — und abschaltbar für Nutzer
+    // mit reduzierter Bewegung.
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    expect(zeichneBlock).toContain("if (!lane.timer.pausiert) {");
+    expect(zeichneBlock).toContain('el("span", "puls")');
+    expect(html).toContain("@keyframes puls {");
+    expect(html).toContain("@media (prefers-reduced-motion: reduce) { .puls { animation: none; } }");
+    // Die Trennlinie zur Aufgabenliste entfällt: Timer und Karten sind
+    // eigenständige Flächen mit Abstand (gap der Lane-Spalte).
+    expect(html).not.toContain('el("div", "trenner")');
+    expect(html).not.toContain(".trenner {");
   });
 
   it("zeigt vor dem Namen ein rundes Avatar-Bild aus der Avatar-Proxy-Route mit Initialen-Fallback bei Ladefehler (C)", () => {
@@ -160,22 +165,31 @@ describe("renderSeite", () => {
     // hinaus — andere Lanes bleiben schmaler. Text-Tripwire, damit die
     // Regel nicht still wieder verschwindet.
     expect(html).toContain("flex: 0 0 300px; min-width: 0;");
-    // overflow-wrap: anywhere auf den textführenden Karten-Elementen, damit
-    // lange, nicht umbrechbare Wörter (Aufgabenname, wo-Zeile,
-    // Timer-was/-wo) innerhalb der Lane umbrechen statt sie zu dehnen.
-    expect(html).toContain('.timer .was { margin-top: 2px; font-weight: 600; overflow-wrap: anywhere; }');
-    expect(html).toContain('.zeile { color: var(--gedeckt); font-size: 13px; overflow-wrap: anywhere; }');
-    expect(html).toContain('.karte .name { font-weight: 600; flex: 1; overflow-wrap: anywhere; }');
+    // Facelift: das Mockup zieht min-width: 0 zusätzlich global — die
+    // Lane-Regel bleibt trotzdem stehen, sie ist der gepinnte Schutz.
+    expect(html).toContain("* { box-sizing: border-box; min-width: 0; }");
+    // Umbruch auf den textführenden Elementen, damit lange, nicht
+    // umbrechbare Wörter (Aufgabenname, Meta-Zeilen, Timer-Aufgabe/-Meta)
+    // innerhalb der Lane umbrechen statt sie zu dehnen. Selektoren im
+    // Facelift umbenannt (.timer .was/.zeile/.karte .name gibt es nicht mehr).
+    expect(html).toContain('.timer-aufgabe { font-size: 14px; font-weight: 600; line-height: 1.4; margin-top: 6px; overflow-wrap: break-word; }');
+    expect(html).toContain('.timer-meta { font-size: 12px; color: var(--gedeckt); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }');
+    expect(html).toContain('.aufgabe-titel { margin: 8px 0 0; font-size: 14px; font-weight: 600; line-height: 1.4; overflow-wrap: break-word; }');
+    expect(html).toContain('gap: 6px 10px; font-size: 12px; color: var(--gedeckt); overflow-wrap: anywhere;');
+    expect(html).toContain('.kopfbox .name { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }');
   });
 
-  it("vergrößert den Lane-Kopf: Avatar (Bild und Initialen-Kreis gleich groß) auf 36px, Name auf 17px (Folgeauftrag 2, 26.08.2026)", () => {
+  it("fasst den Lane-Kopf als Kopfbox: Avatar (Bild und Initialen-Kreis gleich groß) auf 40px, Name 15px/600, alles auf --chip-Fläche mit Radius 12 (Facelift)", () => {
     const html = renderSeite(stand(), null);
-    // .avatar-initialen trägt im Markup immer zusätzlich die Klasse
+    // .avatar-initialen trägt im Markup weiterhin zusätzlich die Klasse
     // "avatar" (el("div", "avatar avatar-initialen", ...)) — Bild und
     // Initialen-Kreis übernehmen die Größe also automatisch aus derselben
     // .avatar-Regel und bleiben dadurch zwangsläufig gleich groß.
-    expect(html).toContain("width: 36px; height: 36px; border-radius: 50%;");
-    expect(html).toContain(".lane-kopf h2 { margin: 0; font-size: 17px; }");
+    expect(html).toContain("width: 40px; height: 40px; border-radius: 50%;");
+    expect(html).toContain(".kopfbox .name { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }");
+    expect(html).toContain("background: var(--chip); border-radius: 12px;");
+    // Der frühere Kopf-Container ist weg.
+    expect(html).not.toContain("lane-kopf");
   });
 
   it("stoppt beim Nachladen sofort per Reload, wenn die Session abgelaufen ist (401), statt den 10-s-Poll in die Brute-Force-Bremse zählen zu lassen (Stufe 2, Task 8; Takt seit Stufe 3, Task 9)", () => {
@@ -221,12 +235,20 @@ describe("renderSeite", () => {
     expect(nachladenBlock).toContain("zeichne(); ticke(); ladeZeiten();");
   });
 
-  it("rendert die Zeitsummen-Zeile unter dem Namen nur für gelieferte IDs (Task 9)", () => {
+  it("rendert das Instrumentenbrett (HEUTE/GESTERN/WOCHE) in der Kopfbox nur für gelieferte IDs — sonst endet die Kopfbox nach der Namenszeile (Task 9, Markup aus dem Facelift)", () => {
     const html = renderSeite(stand(), null);
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
-    expect(zeichneBlock).toContain('el("div", "zeiten", zeitZeile(');
-    // Guard: nur rendern, wenn für diese userId tatsächlich Zeiten geliefert wurden.
-    expect(zeichneBlock).toContain("zeitenProNutzer[lane.userId]");
+    // Guard: nur rendern, wenn für diese userId tatsächlich Zeiten geliefert
+    // wurden — keine leeren Felder und keine Nullen für fremde Lanes.
+    expect(zeichneBlock).toContain("if (zeitenProNutzer[lane.userId]) {");
+    expect(zeichneBlock).toContain('el("div", "zeitenreihe")');
+    expect(zeichneBlock).toContain("zeitFelder(zeitenProNutzer[lane.userId])");
+    expect(zeichneBlock).toContain('el("div", "zeit-label", f.label)');
+    expect(zeichneBlock).toContain('el("div", "zeit-wert", f.wert)');
+    // Die Reihe hängt IN der Kopfbox, nicht als eigenes Element daneben.
+    expect(zeichneBlock).toContain("kopf.appendChild(reihe);");
+    // Die alte Fließtext-Zeile unter dem Namen gibt es nicht mehr.
+    expect(zeichneBlock).not.toContain('el("div", "zeiten"');
   });
 
   it("wendet in zeichne() erst den Projekt-Filter an und zeichnet danach (Task 9)", () => {
@@ -287,8 +309,9 @@ describe("renderSeite", () => {
     expect(html).toContain("ladeEinstellungen();");
   });
 
-  it("macht den Lane-Kopf per draggable=\"true\" ziehbar und verdrahtet dragstart/dragover/drop NUR per addEventListener (CSP script-src-attr 'none', Task 10)", () => {
+  it("macht die Kopfbox per draggable=\"true\" ziehbar und verdrahtet dragstart/dragover/drop NUR per addEventListener (CSP script-src-attr 'none', Task 10; Träger seit dem Facelift die Kopfbox)", () => {
     const html = renderSeite(stand(), null);
+    expect(html).toContain('var kopf = el("header", "kopfbox");');
     expect(html).toContain('kopf.setAttribute("draggable", "true")');
     expect(html).toContain('addEventListener("dragstart"');
     expect(html).toContain('addEventListener("dragover"');
@@ -337,6 +360,87 @@ describe("renderSeite", () => {
     expect(forEachPos).toBeGreaterThan(-1);
     expect(einstellungenPos).toBeLessThan(filterPos);
     expect(filterPos).toBeLessThan(forEachPos);
+  });
+
+  // ── Facelift (28.08.2026): abgenommenes Design aus dem Mockup ─────────
+  // Wie überall in dieser Suite reine Text-Tripwires gegen den Quelltext
+  // des ausgelieferten Dokuments (kein jsdom).
+
+  it("stellt Kopfbox, Timer und Karten als eigenständige Elemente auf --grund — die Lane hat keine eigene Umrandungs-Box mehr (Facelift)", () => {
+    const html = renderSeite(stand(), null);
+    expect(html).toContain(".lane { flex: 0 0 300px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }");
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    expect(zeichneBlock).toContain('var box = el("section", "lane");');
+    // Reihenfolge in der Spalte: Kopfbox, dann Timer, dann Kartenliste.
+    const kopfPos = zeichneBlock!.indexOf("box.appendChild(kopf);");
+    const timerPos = zeichneBlock!.indexOf("box.appendChild(t);");
+    const listePos = zeichneBlock!.indexOf("box.appendChild(liste);");
+    expect(kopfPos).toBeGreaterThan(-1);
+    expect(timerPos).toBeGreaterThan(-1);
+    expect(listePos).toBeGreaterThan(-1);
+    expect(kopfPos).toBeLessThan(timerPos);
+    expect(timerPos).toBeLessThan(listePos);
+  });
+
+  it("setzt die Status-Badge ÜBER den Aufgabentitel, nie daneben — der Titel bekommt die volle Breite (Facelift)", () => {
+    const html = renderSeite(stand(), null);
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    const badgePos = zeichneBlock!.indexOf('"badge" + (a.statusTyp === "progress" ? " badge-progress" : "")');
+    const titelPos = zeichneBlock!.indexOf('el("h3", "aufgabe-titel", a.name)');
+    const metaPos = zeichneBlock!.indexOf('el("div", "aufgabe-meta")');
+    expect(badgePos).toBeGreaterThan(-1);
+    expect(titelPos).toBeGreaterThan(-1);
+    expect(metaPos).toBeGreaterThan(-1);
+    expect(badgePos).toBeLessThan(titelPos);
+    expect(titelPos).toBeLessThan(metaPos);
+    // Der frühere Kopf-Container mit Titel und Chip nebeneinander ist weg.
+    expect(zeichneBlock).not.toContain('el("div", "kopf")');
+    // Keine Emojis, keine Symbole: Prio steht als Wort in --warn.
+    expect(zeichneBlock).toContain('el("span", "prio", "Prio")');
+    expect(zeichneBlock).not.toContain('el("span", "prio", "!")');
+    expect(html).toContain(".prio { color: var(--warn); font-weight: 600; white-space: nowrap; }");
+  });
+
+  it("zeigt die Fälligkeit als Datums-Chip, überfällig zusätzlich als Wort statt nur als Farbe (Facelift)", () => {
+    const html = renderSeite(stand(), null);
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    expect(zeichneBlock).toContain('"chip-datum" + (a.ueberfaellig ? " chip-warn" : "")');
+    expect(zeichneBlock).toContain('datumKurz(a.faelligAm) + (a.ueberfaellig ? " · überfällig" : "")');
+    expect(html).toContain(".chip-warn { background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); font-weight: 600; }");
+    // Die alte, nur farbige Fälligkeitsangabe gibt es nicht mehr.
+    expect(zeichneBlock).not.toContain('"faellig" + (a.ueberfaellig ? " rot" : "")');
+  });
+
+  it("behält die Uhr-Attribute am Zeit-Element der neuen Timer-Karte — ticke() findet sie unverändert über [data-uhr] (Facelift)", () => {
+    const html = renderSeite(stand(), null);
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    expect(zeichneBlock).toContain('var zahl = el("span", "timer-zeit", "");');
+    expect(zeichneBlock).toContain('zahl.setAttribute("data-uhr", String(lane.timer.sekunden));');
+    expect(zeichneBlock).toContain('zahl.setAttribute("data-pausiert", lane.timer.pausiert ? "1" : "0");');
+    const tickeBlock = html.split("function ticke()")[1]?.split("\n  }")[0];
+    expect(tickeBlock).toContain('querySelectorAll("[data-uhr]")');
+    expect(tickeBlock).toContain('getAttribute("data-pausiert") === "1"');
+  });
+
+  it("trägt die Wortmarke im Kopfbereich (34px, currentColor) und ein data:-Favicon im Head — ohne zusätzlichen Script-Block und ohne CSP-Änderung (Facelift)", () => {
+    const html = renderSeite(stand(), null);
+    // Favicon im Kopf des Dokuments, vor <body>. Die CSP erlaubt data: für
+    // Bilder bereits (index.ts, imgSrc) — daran ändert sich nichts.
+    const dokumentKopf = html.split("<body>")[0];
+    expect(dokumentKopf).toContain('<link rel="icon" href="data:image/png;base64,iVBORw0KGgo');
+    // Logo als Inline-SVG im Kopfbereich, auf currentColor gestellt.
+    expect(html).toContain('<svg class="logo" role="img" aria-label="straightup digital"');
+    expect(html).toContain("fill: currentColor;");
+    expect(html).toContain(".logo { height: 34px; width: auto; color: var(--tinte); flex: none; }");
+    expect(html).toContain('<h1 class="bereich">Teamboard</h1>');
+    // Der Logo-Block trägt weder einen zusätzlichen Script-Block noch
+    // Inline-Handler ins Dokument; die beiden Stylesheet-Blöcke sind der
+    // Seiten-Block und der aus der SVG-Vorlage.
+    expect(html.split("</script>").length - 1).toBe(2);
+    expect(html.split("</style>").length - 1).toBe(2);
+    expect(html).not.toMatch(/\son\w+\s*=/);
+    expect(html).not.toContain("__name(");
+    expect(html).not.toMatch(/\.innerHTML\s*=/);
   });
 
   // ── Task 7: Detail-Panel (Slide-in) ───────────────────────────────────
@@ -644,11 +748,25 @@ describe("formatiereZeit (P1 — H:MM ohne Sekunden, für die Zeitsummen-Zeile, 
   });
 });
 
-describe("zeitZeile (P1 — Task 9)", () => {
-  it("baut 'Heute H:MM · Vortag H:MM · Woche H:MM' aus den drei Zeitsummen", () => {
+describe("zeitFelder (P1 — Instrumentenbrett der Kopfbox, Task 9 / Facelift)", () => {
+  it("liefert HEUTE/GESTERN/WOCHE als drei beschriftete Felder mit H:MM-Werten", () => {
     expect(
-      zeitZeile({ heuteSekunden: 3720, vortagSekunden: 27900, wocheSekunden: 75780 })
-    ).toBe("Heute 1:02 · Vortag 7:45 · Woche 21:03");
+      zeitFelder({ heuteSekunden: 3720, vortagSekunden: 27900, wocheSekunden: 75780 })
+    ).toEqual([
+      { label: "HEUTE", wert: "1:02" },
+      { label: "GESTERN", wert: "7:45" },
+      { label: "WOCHE", wert: "21:03" },
+    ]);
+  });
+
+  it("reicht die Grenzfälle von formatiereZeit durch (leerer Wert statt 'NaN:NaN')", () => {
+    expect(
+      zeitFelder({ heuteSekunden: NaN, vortagSekunden: -1, wocheSekunden: 0 })
+    ).toEqual([
+      { label: "HEUTE", wert: "" },
+      { label: "GESTERN", wert: "" },
+      { label: "WOCHE", wert: "0:00" },
+    ]);
   });
 });
 
@@ -940,10 +1058,13 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
     expect(html).not.toContain("__name(");
   });
 
-  it("enthält auch formatiereZeit, zeitZeile, projekteAusBoard und wendeProjektFilterAn (Task 9), weiterhin ohne __name(", () => {
+  it("enthält auch formatiereZeit, zeitFelder, projekteAusBoard und wendeProjektFilterAn (Task 9, zeitFelder seit dem Facelift), weiterhin ohne __name(", () => {
     const html = renderSeite(stand(), null);
     expect(html).toContain("function formatiereZeit(");
-    expect(html).toContain("function zeitZeile(");
+    expect(html).toContain("function zeitFelder(");
+    // zeitZeile ist im Facelift durch zeitFelder ersetzt — die
+    // Fließtext-Variante darf nicht als Leiche im Client-Skript bleiben.
+    expect(html).not.toContain("function zeitZeile(");
     expect(html).toContain("function projekteAusBoard(");
     expect(html).toContain("function wendeProjektFilterAn(");
     expect(html).not.toContain("__name(");
