@@ -6,11 +6,10 @@ import type { ZeitenProNutzer } from '../services/teamboard/zeiten.js';
 import { projekteFuerBoard, type ProjekteLader, type ProjekteProId } from '../services/teamboard/projekte.js';
 import type { ErledigenFehler, RueckgaengigFehler } from '../services/teamboard/erledigen.js';
 import type { Betrachter } from '../services/teamboard/seite.js';
-import {
-  leererFilter,
-  type TeamboardEinstellungen,
-  type TeamboardEinstellungenStore,
-  type TeamboardFilter,
+import type {
+  TeamboardEinstellungen,
+  TeamboardEinstellungenStore,
+  TeamboardFilter,
 } from '../core/teamboard-einstellungen.js';
 import { UNDO_FENSTER_MS } from '../core/teamboard-erledigungen.js';
 
@@ -110,12 +109,16 @@ function istGueltigeWertListe(wert: unknown): wert is string[] {
 }
 
 /**
- * Fehlt `filter` ganz, gilt "kein Filter aktiv" — ein Client von vor der
- * Filterleiste (offener Tab über den Deploy hinweg) darf mit seinem PUT
- * nicht scheitern und dabei seine Lane-Einstellungen verlieren.
+ * Fehlt `filter` ganz, kommt `undefined` zurück (nicht der leere Filter):
+ * ein Client von vor der Filterleiste — ein über den Deploy hinweg offener
+ * Tab, der wegen Drag-and-drop oder Ausblenden ein PUT im alten Format
+ * schickt — darf damit weder scheitern noch den in einem anderen Tab
+ * gesetzten Filter löschen. Die Route lässt den gespeicherten Wert dann
+ * stehen; nur ein ausdrücklich mitgeschicktes `filter` schreibt.
+ * null heißt: mitgeschickt, aber ungültig ⇒ 400.
  */
-function parseFilter(wert: unknown): TeamboardFilter | null {
-  if (wert === undefined) return leererFilter();
+function parseFilter(wert: unknown): TeamboardFilter | null | undefined {
+  if (wert === undefined) return undefined;
   if (typeof wert !== 'object' || wert === null || Array.isArray(wert)) return null;
   const f = wert as Record<string, unknown>;
   if (!istGueltigeWertListe(f.projektArten)) return null;
@@ -136,7 +139,10 @@ function parseFilter(wert: unknown): TeamboardFilter | null {
   };
 }
 
-function parseEinstellungen(body: unknown): TeamboardEinstellungen | null {
+/** filter fehlt im Body ⇒ das Feld fehlt auch hier (s. parseFilter). */
+type GesendeteEinstellungen = Omit<TeamboardEinstellungen, 'filter'> & { filter?: TeamboardFilter };
+
+function parseEinstellungen(body: unknown): GesendeteEinstellungen | null {
   if (typeof body !== 'object' || body === null) return null;
   const b = body as Record<string, unknown>;
   if (b.reihenfolge !== null && !istGueltigeIdListe(b.reihenfolge)) return null;
@@ -146,7 +152,7 @@ function parseEinstellungen(body: unknown): TeamboardEinstellungen | null {
   return {
     reihenfolge: b.reihenfolge as string[] | null,
     ausgeblendet: b.ausgeblendet as string[],
-    filter,
+    ...(filter === undefined ? {} : { filter }),
   };
 }
 
@@ -360,8 +366,8 @@ export function createTeamboardRouter(deps: Deps): Router {
         res.status(403).json({ error: 'forbidden', message: 'Nur per Session-Login' });
         return;
       }
-      const einstellungen = parseEinstellungen(req.body);
-      if (!einstellungen) {
+      const gesendet = parseEinstellungen(req.body);
+      if (!gesendet) {
         res.status(400).json({
           error: 'validation',
           message:
@@ -369,6 +375,14 @@ export function createTeamboardRouter(deps: Deps): Router {
         });
         return;
       }
+      // Ohne mitgeschicktes filter-Feld bleibt der gespeicherte Filter stehen
+      // — sonst löschte ein PUT im alten Format (Alt-Tab, s. parseFilter)
+      // die Auswahl aus einem anderen Tab.
+      const einstellungen: TeamboardEinstellungen = {
+        reihenfolge: gesendet.reihenfolge,
+        ausgeblendet: gesendet.ausgeblendet,
+        filter: gesendet.filter ?? deps.einstellungen.get(auth.user!.id).filter,
+      };
       deps.einstellungen.set(auth.user!.id, einstellungen);
       res.json(einstellungen);
     } catch (e: any) {

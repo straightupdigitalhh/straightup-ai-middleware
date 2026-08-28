@@ -358,6 +358,26 @@ describe('GET/PUT /api/teamboard/einstellungen', () => {
     });
   });
 
+  it('PUT ohne filter-Feld lässt einen bereits gespeicherten Filter STEHEN — ein Alt-Tab darf ihn nicht löschen', async () => {
+    // Realer Fall: über den Deploy hinweg offener Tab im alten Format
+    // schickt wegen Drag-and-drop oder Ausblenden ein PUT und hätte damit
+    // den in einem anderen Tab gesetzten Filter gelöscht.
+    const deps = makeDeps();
+    const app = makeApp(deps, adminSession);
+    await request(app)
+      .put('/api/teamboard/einstellungen')
+      .send({ reihenfolge: null, ausgeblendet: [], filter: vollerFilter });
+
+    const altTab = await request(app)
+      .put('/api/teamboard/einstellungen')
+      .send({ reihenfolge: [uuidA], ausgeblendet: [uuidC] });
+
+    expect(altTab.status).toBe(200);
+    expect(altTab.body).toEqual({ reihenfolge: [uuidA], ausgeblendet: [uuidC], filter: vollerFilter });
+    const get = await request(app).get('/api/teamboard/einstellungen');
+    expect(get.body.filter).toEqual(vollerFilter);
+  });
+
   it('PUT ⇒ 400, wenn filter kein Objekt ist', async () => {
     const deps = makeDeps();
     const res = await request(makeApp(deps, adminSession))
