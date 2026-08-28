@@ -198,7 +198,7 @@ describe("renderSeite", () => {
     expect(html).toContain('.kopfbox .name { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }');
   });
 
-  it("fasst den Lane-Kopf als Kopfbox: Avatar (Bild und Initialen-Kreis gleich groß) auf 40px, Name 15px/600, alles auf --chip-Fläche mit Radius 12 (Facelift)", () => {
+  it("fasst den Lane-Kopf als Kopfbox: Avatar (Bild und Initialen-Kreis gleich groß) auf 40px, Name 15px/600, Radius 12 (Facelift)", () => {
     const html = renderSeite(stand(), null, {});
     // .avatar-initialen trägt im Markup weiterhin zusätzlich die Klasse
     // "avatar" (el("div", "avatar avatar-initialen", ...)) — Bild und
@@ -206,7 +206,9 @@ describe("renderSeite", () => {
     // .avatar-Regel und bleiben dadurch zwangsläufig gleich groß.
     expect(html).toContain("width: 40px; height: 40px; border-radius: 50%;");
     expect(html).toContain(".kopfbox .name { margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }");
-    expect(html).toContain("background: var(--chip); border-radius: 12px;");
+    // Die Fläche der Kopfbox pinnt seit der Farbentscheidung vom 28.08. der
+    // eigene Petrol-Test weiter unten — hier bleibt nur der Radius.
+    expect(html).toContain("border-radius: 12px;");
     // Der frühere Kopf-Container ist weg.
     expect(html).not.toContain("lane-kopf");
   });
@@ -400,6 +402,20 @@ describe("renderSeite", () => {
     expect(listePos).toBeGreaterThan(-1);
     expect(kopfPos).toBeLessThan(timerPos);
     expect(timerPos).toBeLessThan(listePos);
+  });
+
+  it("färbt die Kopfbox in Petrol — der feste Hex wird über --grund gemischt und stimmt dadurch in beiden Farbschemata (Farbentscheidung 28.08.)", () => {
+    const html = renderSeite(stand(), null, {});
+    // Entscheidung aus der Anprobe im Mockup: nicht die --chip-Fläche, nicht
+    // Mint. Der Pin hält den Hex fest, damit die Entscheidung nicht still
+    // wegrefaktoriert wird.
+    expect(html).toContain("background: color-mix(in srgb, #1c6e7d 13%, var(--grund));");
+    expect(html).toContain("border: 1px solid color-mix(in srgb, #1c6e7d 26%, var(--grund));");
+    const kopfboxCss = html.split(".kopfbox {")[1]?.split("}")[0];
+    expect(kopfboxCss).not.toContain("var(--chip)");
+    // Der Rest der Kopfbox bleibt unangetastet (Grid, Innenabstand, Radius).
+    expect(kopfboxCss).toContain("display: grid; grid-template-columns: auto 1fr auto");
+    expect(kopfboxCss).toContain("border-radius: 12px");
   });
 
   it("hängt den Karten-Wrapper nur an, wenn er Karten bekommt — leer erzeugte er über den Flex-gap 14px toten Abstand am Spaltenfuß (Fix-Runde)", () => {

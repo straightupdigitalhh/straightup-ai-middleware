@@ -402,11 +402,20 @@ export function renderSeite(
   .lane { flex: 0 0 300px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
   @media (max-width: 480px) { .lane { flex-basis: 86vw; } }
 
-  /* ─── Kopfbox der Lane: Avatar, Name, Ausblenden, Instrumentenbrett ─── */
+  /* ─── Kopfbox der Lane: Avatar, Name, Ausblenden, Instrumentenbrett ───
+     Farbentscheidung vom 28.08.2026 (Anprobe im Mockup): Petrol statt der
+     bisherigen --chip-Fläche. Der feste Hex #1c6e7d wird bewusst über
+     var(--grund) gemischt statt durch ein Token ersetzt: --grund ist im
+     Hellen fast weiß und im Dunkeln fast schwarz, dieselbe Regel ergibt
+     dadurch von selbst einen hellen Petrolschimmer bzw. ein dunkles
+     Petrol — ein eigenes Token bräuchte zwei gepflegte Werte für dieselbe
+     Farbe. */
   .kopfbox {
     display: grid; grid-template-columns: auto 1fr auto; align-items: center;
     column-gap: 12px; row-gap: 12px; padding: 14px 16px;
-    background: var(--chip); border-radius: 12px;
+    background: color-mix(in srgb, #1c6e7d 13%, var(--grund));
+    border: 1px solid color-mix(in srgb, #1c6e7d 26%, var(--grund));
+    border-radius: 12px;
   }
   .avatar {
     width: 40px; height: 40px; border-radius: 50%; flex: none;
