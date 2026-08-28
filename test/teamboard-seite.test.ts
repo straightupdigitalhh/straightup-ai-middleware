@@ -93,10 +93,22 @@ describe("renderSeite", () => {
   // DOM/jsdom) — die folgenden zwei Tests sind daher bewusst nur textuelle
   // Stolperdrähte gegen ein versehentliches Zurückdrehen des Fixes, kein
   // Beleg für das tatsächliche Laufzeitverhalten im Browser.
-  it("ruft nach dem Nachladen ticke() direkt nach zeichne() auf (kein Uhren-Flackern)", () => {
+  it("befüllt die Uhren in zeichne() selbst — kein leerer Zeit-Span bis zum nächsten Sekundentick (Fix-Runde)", () => {
     const html = renderSeite(stand(), null);
+    // zeichne() baut die Zeit-Spans leer auf; erst ticke() setzt ihren Text.
+    // Jeder Aufrufer, der das vergisst, lässt das größte Element der Lane
+    // kurz leer blinken (10-s-Poll, /zeiten, /einstellungen, Ausblenden,
+    // Drop). Deshalb ruft zeichne() ticke() selbst — als letzte Anweisung.
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    expect(zeichneBlock!.trimEnd().endsWith("ticke();\n  }")).toBe(true);
+    // Und die dadurch doppelten Aufrufe an den Aufruforten sind weg.
     const nachladenBlock = html.split("function nachladen()")[1]?.split("\n  }")[0];
-    expect(nachladenBlock).toContain("zeichne(); ticke();");
+    expect(nachladenBlock).toContain("zeichne(); ladeZeiten();");
+    expect(nachladenBlock).not.toContain("ticke()");
+    const startBlock = html.split("document.addEventListener(\"visibilitychange\"")[1];
+    expect(startBlock).toContain("zeichne();\n  ladeZeiten();\n  ladeEinstellungen();");
+    // Der Sekundentakt bleibt als Taktgeber bestehen.
+    expect(html).toContain("setInterval(ticke, 1000);");
   });
 
   it("merkt sich Scrollposition und aufgeklappte Lanes über einen Neuaufbau hinweg", () => {
@@ -230,9 +242,10 @@ describe("renderSeite", () => {
     expect(ladeZeitenBlock).toContain("res.status === 401");
     expect(ladeZeitenBlock).toContain("location.reload();");
     // Nach beiden zeichne()-Zyklen aufgerufen: initial und im 10-s-Nachladen.
-    expect(html).toContain("zeichne(); ticke(); ladeZeiten();");
+    // ticke() steht seit der Fix-Runde am Ende von zeichne() selbst.
+    expect(html).toContain("zeichne(); ladeZeiten();");
     const nachladenBlock = html.split("function nachladen()")[1]?.split("\n  }")[0];
-    expect(nachladenBlock).toContain("zeichne(); ticke(); ladeZeiten();");
+    expect(nachladenBlock).toContain("zeichne(); ladeZeiten();");
   });
 
   it("rendert das Instrumentenbrett (HEUTE/GESTERN/WOCHE) in der Kopfbox nur für gelieferte IDs — sonst endet die Kopfbox nach der Namenszeile (Task 9, Markup aus dem Facelift)", () => {

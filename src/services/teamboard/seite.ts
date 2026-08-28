@@ -205,7 +205,7 @@ export function wendeEinstellungenAn(
  * Zuständig, Projekt, Status, Fällig, Kennung, Priorität. Fehlende, leere
  * und null-Werte werden zu "—", damit im Panel nie eine leere Zeile oder
  * gar "undefined" steht. Ruft datumKurz als Geschwister-Funktion auf
- * derselben Einbettungsebene auf (kein Closure, wie zeitZeile).
+ * derselben Einbettungsebene auf (kein Closure, wie zeitFelder).
  */
 export function panelFelder(
   a: AufgabenKarte,
@@ -807,6 +807,14 @@ ${LOGO_SVG}
     // Ein offenes Panel aus den frischen Daten neu befüllen (Task 7) — es
     // liegt außerhalb von #lanes und überlebt das Leeren oben.
     fuellePanel();
+    // Die Zeit-Spans oben sind absichtlich leer aufgebaut; ihren Text setzt
+    // ausschließlich ticke() über [data-uhr]. Ohne diesen Aufruf bliebe das
+    // größte Element der Lane nach JEDEM Neuaufbau bis zum nächsten
+    // Sekundentick leer — beim 10-s-Poll, nach /zeiten und /einstellungen,
+    // beim Aus-/Einblenden und nach jedem Drop. ticke() ist idempotent und
+    // liest nur den aktuellen Stand, deshalb steht der Aufruf hier statt an
+    // acht Aufruforten (wo er zwangsläufig irgendwann einer vergisst).
+    ticke();
   }
 
   function aktualisiereKopf() {
@@ -926,7 +934,7 @@ ${LOGO_SVG}
       })
       .then(function (neu) {
         if (!neu) return;
-        stand = neu; empfangenUm = Date.now(); zeichne(); ticke(); ladeZeiten();
+        stand = neu; empfangenUm = Date.now(); zeichne(); ladeZeiten();
       })
       .catch(function (fehler) {
         console.warn("teamboard: Nachladen fehlgeschlagen", fehler);
@@ -1347,7 +1355,6 @@ ${LOGO_SVG}
   });
 
   zeichne();
-  ticke();
   ladeZeiten();
   ladeEinstellungen();
   setInterval(ticke, 1000);
