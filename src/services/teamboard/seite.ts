@@ -264,9 +264,10 @@ export function projektPasst(
 /**
  * Der aufgabenbezogene Teil des Filters (Prio, Status, Arbeitsart,
  * Fälligkeit). Innerhalb der Fälligkeit gilt ODER: gewählt sind Töpfe, kein
- * Zeitraum. "diese Woche" ist eine obere Grenze bis einschließlich Sonntag
- * und schließt Überfälliges bewusst mit ein — was in dieser Woche fällig
- * war, ist in dieser Woche fällig.
+ * Zeitraum. "diese Woche" reicht von HEUTE bis einschließlich Sonntag —
+ * wer sie wählt, will sehen, was noch ansteht; der Rückstand hat mit
+ * "überfällig" seine eigene Option, und beides zusammen lässt sich
+ * weiterhin ausdrücklich wählen.
  */
 export function aufgabePasst(
   a: AufgabenKarte,
@@ -285,7 +286,7 @@ export function aufgabePasst(
     var treffer = false;
     if (filter.faelligkeit.indexOf("ueberfaellig") !== -1 && a.ueberfaellig) treffer = true;
     if (filter.faelligkeit.indexOf("heute") !== -1 && tag === heute) treffer = true;
-    if (filter.faelligkeit.indexOf("woche") !== -1 && tag !== null && tag <= sonntag) treffer = true;
+    if (filter.faelligkeit.indexOf("woche") !== -1 && tag !== null && tag >= heute && tag <= sonntag) treffer = true;
     if (filter.faelligkeit.indexOf("ohneTermin") !== -1 && tag === null) treffer = true;
     if (!treffer) return false;
   }

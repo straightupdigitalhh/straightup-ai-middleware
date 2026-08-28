@@ -1398,10 +1398,26 @@ describe("wendeFilterAn (P1 — die Filterleiste auf die Lanes)", () => {
       expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["heute"]);
     });
 
-    it("diese Woche reicht bis einschließlich Sonntag — der Montag danach fällt heraus", () => {
+    it("diese Woche reicht von heute bis einschließlich Sonntag — der Montag danach fällt heraus", () => {
       const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ faelligkeit: ["woche"] }), HEUTE);
-      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["ueber", "heute", "sonntag"]);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["heute", "sonntag"]);
       expect(sonntagDerWoche(HEUTE)).toBe(SONNTAG);
+    });
+
+    it("diese Woche zeigt NICHT den Rückstand — dafür gibt es die eigene Option 'überfällig' (Review-Fix)", () => {
+      // Wer "diese Woche" wählt, will wissen, was noch ansteht. Käme der
+      // Rückstand mit, wäre die Option nur eine schlechtere Version von
+      // "überfällig ODER diese Woche" — und die lässt sich weiterhin
+      // ausdrücklich wählen (ODER innerhalb der Dimension).
+      const nurWoche = wendeFilterAn(lanes, PROJEKTE, filter({ faelligkeit: ["woche"] }), HEUTE);
+      expect(nurWoche[0].aufgaben.map((a) => a.id)).not.toContain("ueber");
+      const beides = wendeFilterAn(
+        lanes,
+        PROJEKTE,
+        filter({ faelligkeit: ["ueberfaellig", "woche"] }),
+        HEUTE
+      );
+      expect(beides[0].aufgaben.map((a) => a.id)).toEqual(["ueber", "heute", "sonntag"]);
     });
 
     it("ohne Termin nimmt genau die Karten ohne Fälligkeitsdatum", () => {
