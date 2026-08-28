@@ -6,7 +6,12 @@ import type { ZeitenProNutzer } from '../services/teamboard/zeiten.js';
 import { projekteFuerBoard, type ProjekteLader, type ProjekteProId } from '../services/teamboard/projekte.js';
 import type { ErledigenFehler, RueckgaengigFehler } from '../services/teamboard/erledigen.js';
 import type { Betrachter } from '../services/teamboard/seite.js';
-import type { TeamboardEinstellungen, TeamboardEinstellungenStore } from '../core/teamboard-einstellungen.js';
+import {
+  leererFilter,
+  type TeamboardEinstellungen,
+  type TeamboardEinstellungenStore,
+  type TeamboardFilter,
+} from '../core/teamboard-einstellungen.js';
 import { UNDO_FENSTER_MS } from '../core/teamboard-erledigungen.js';
 
 /** Nur die zwei Methoden, die die Route tatsächlich braucht (T4, `erstelleErledigenDienst`). */
@@ -73,6 +78,10 @@ type AvatarCacheEintrag =
 // ─── Einstellungen-Validierung ────────────────────────────────────
 
 const EINSTELLUNGEN_MAX_EINTRAEGE = 100;
+// Obergrenze je Filter-Wert. Projekt-Arten und Arbeitsarten sind frei
+// benannte awork-Daten — hier zählt nur, dass niemand beliebig viel Text in
+// die Nutzer-Zeile schreibt.
+const FILTER_MAX_LAENGE = 200;
 
 function istGueltigeIdListe(wert: unknown): wert is string[] {
   return (
@@ -82,12 +91,63 @@ function istGueltigeIdListe(wert: unknown): wert is string[] {
   );
 }
 
+/**
+ * Filter-Werte werden NUR auf Typ, Anzahl und Länge geprüft, nicht gegen
+ * eine Werteliste: Projekt-Arten, Arbeitsarten und Projekt-IDs sind
+ * Fremddaten aus awork, und selbst bei den festen Schlüsseln (Fälligkeit,
+ * Status) wäre eine serverseitige Liste die falsche Bremse — ein Client,
+ * der einen neuen Wert kennt, bekäme sonst 400 auf das GESAMTE PUT und
+ * verlöre damit auch das Speichern von Lane-Reihenfolge und Ausgeblendet.
+ * Ein unbekannter Wert kostet nichts: er trifft im Client schlicht auf
+ * keine Karte.
+ */
+function istGueltigeWertListe(wert: unknown): wert is string[] {
+  return (
+    Array.isArray(wert) &&
+    wert.length <= EINSTELLUNGEN_MAX_EINTRAEGE &&
+    wert.every((v) => typeof v === 'string' && v.length <= FILTER_MAX_LAENGE)
+  );
+}
+
+/**
+ * Fehlt `filter` ganz, gilt "kein Filter aktiv" — ein Client von vor der
+ * Filterleiste (offener Tab über den Deploy hinweg) darf mit seinem PUT
+ * nicht scheitern und dabei seine Lane-Einstellungen verlieren.
+ */
+function parseFilter(wert: unknown): TeamboardFilter | null {
+  if (wert === undefined) return leererFilter();
+  if (typeof wert !== 'object' || wert === null || Array.isArray(wert)) return null;
+  const f = wert as Record<string, unknown>;
+  if (!istGueltigeWertListe(f.projektArten)) return null;
+  if (f.projekt !== null && !(typeof f.projekt === 'string' && f.projekt.length <= FILTER_MAX_LAENGE)) return null;
+  if (!istGueltigeWertListe(f.faelligkeit)) return null;
+  if (!istGueltigeWertListe(f.status)) return null;
+  if (!istGueltigeWertListe(f.arbeitsarten)) return null;
+  if (typeof f.nurPrio !== 'boolean') return null;
+  if (typeof f.nurLaufendeProjekte !== 'boolean') return null;
+  return {
+    projektArten: f.projektArten,
+    projekt: f.projekt as string | null,
+    faelligkeit: f.faelligkeit,
+    status: f.status,
+    arbeitsarten: f.arbeitsarten,
+    nurPrio: f.nurPrio,
+    nurLaufendeProjekte: f.nurLaufendeProjekte,
+  };
+}
+
 function parseEinstellungen(body: unknown): TeamboardEinstellungen | null {
   if (typeof body !== 'object' || body === null) return null;
   const b = body as Record<string, unknown>;
   if (b.reihenfolge !== null && !istGueltigeIdListe(b.reihenfolge)) return null;
   if (!istGueltigeIdListe(b.ausgeblendet)) return null;
-  return { reihenfolge: b.reihenfolge as string[] | null, ausgeblendet: b.ausgeblendet as string[] };
+  const filter = parseFilter(b.filter);
+  if (filter === null) return null;
+  return {
+    reihenfolge: b.reihenfolge as string[] | null,
+    ausgeblendet: b.ausgeblendet as string[],
+    filter,
+  };
 }
 
 // ─── Betrachter ───────────────────────────────────────────────────
@@ -304,7 +364,8 @@ export function createTeamboardRouter(deps: Deps): Router {
       if (!einstellungen) {
         res.status(400).json({
           error: 'validation',
-          message: 'reihenfolge muss null oder eine Liste von awork-User-IDs sein, ausgeblendet eine Liste von awork-User-IDs (je max. 100 Einträge)',
+          message:
+            'reihenfolge muss null oder eine Liste von awork-User-IDs sein, ausgeblendet eine Liste von awork-User-IDs (je max. 100 Einträge); filter darf fehlen, sonst müssen projektArten/faelligkeit/status/arbeitsarten Listen kurzer Zeichenketten, projekt null oder Zeichenkette und nurPrio/nurLaufendeProjekte Wahrheitswerte sein',
         });
         return;
       }

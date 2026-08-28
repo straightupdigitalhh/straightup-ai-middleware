@@ -8,7 +8,7 @@ import { openDb } from '../src/core/db.js';
 import { UserStore } from '../src/core/users.js';
 import { SessionStore } from '../src/core/sessions.js';
 import { createAuthRouter } from '../src/routes/auth.js';
-import { TeamboardEinstellungenStore } from '../src/core/teamboard-einstellungen.js';
+import { TeamboardEinstellungenStore, LEERER_FILTER } from '../src/core/teamboard-einstellungen.js';
 import type { ZeitenProNutzer } from '../src/services/teamboard/zeiten.js';
 import { UNDO_FENSTER_MS } from '../src/core/teamboard-erledigungen.js';
 import type { ErledigenFehler, RueckgaengigFehler } from '../src/services/teamboard/erledigen.js';
@@ -84,11 +84,16 @@ const zeitenFixture: ZeitenProNutzer = {
   'u-max': { heuteSekunden: 400, vortagSekunden: 500, wocheSekunden: 600 },
 };
 
+type Einstellungen = Parameters<TeamboardEinstellungenStore['set']>[1];
+
 function fakeEinstellungenStore() {
-  const data = new Map<string, { reihenfolge: string[] | null; ausgeblendet: string[] }>();
+  const data = new Map<string, Einstellungen>();
   return {
-    get: vi.fn((userId: string) => data.get(userId) ?? { reihenfolge: null, ausgeblendet: [] }),
-    set: vi.fn((userId: string, e: { reihenfolge: string[] | null; ausgeblendet: string[] }) => {
+    get: vi.fn(
+      (userId: string) =>
+        data.get(userId) ?? { reihenfolge: null, ausgeblendet: [], filter: { ...LEERER_FILTER } },
+    ),
+    set: vi.fn((userId: string, e: Einstellungen) => {
       data.set(userId, e);
     }),
   };
@@ -313,18 +318,82 @@ describe('GET/PUT /api/teamboard/einstellungen', () => {
     expect(res.status).toBe(403);
   });
 
+  const vollerFilter = {
+    projektArten: ['Website-Support', 'Vorlagen'],
+    projekt: uuidA,
+    faelligkeit: ['ueberfaellig', 'heute'],
+    status: ['todo', 'progress'],
+    arbeitsarten: ['Projektarbeit'],
+    nurPrio: true,
+    nurLaufendeProjekte: true,
+  };
+
   it('Session-Roundtrip: PUT dann GET liefert denselben Stand', async () => {
     const deps = makeDeps();
     const app = makeApp(deps, adminSession);
     const put = await request(app)
       .put('/api/teamboard/einstellungen')
-      .send({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC] });
+      .send({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC], filter: vollerFilter });
     expect(put.status).toBe(200);
-    expect(put.body).toEqual({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC] });
+    expect(put.body).toEqual({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC], filter: vollerFilter });
 
     const get = await request(app).get('/api/teamboard/einstellungen');
     expect(get.status).toBe(200);
-    expect(get.body).toEqual({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC] });
+    expect(get.body).toEqual({ reihenfolge: [uuidB, uuidA], ausgeblendet: [uuidC], filter: vollerFilter });
+  });
+
+  // ── Filter-Feld: Abwärtskompatibilität und Validierung ──────────
+
+  it('PUT ohne filter-Feld ⇒ 200 mit leerem Filter — ein Client von vor der Filterleiste darf nicht scheitern', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, adminSession))
+      .put('/api/teamboard/einstellungen')
+      .send({ reihenfolge: null, ausgeblendet: [uuidC] });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ reihenfolge: null, ausgeblendet: [uuidC], filter: LEERER_FILTER });
+    expect(deps.einstellungen.set).toHaveBeenCalledWith('admin-1', {
+      reihenfolge: null,
+      ausgeblendet: [uuidC],
+      filter: LEERER_FILTER,
+    });
+  });
+
+  it('PUT ⇒ 400, wenn filter kein Objekt ist', async () => {
+    const deps = makeDeps();
+    const res = await request(makeApp(deps, adminSession))
+      .put('/api/teamboard/einstellungen')
+      .send({ reihenfolge: null, ausgeblendet: [], filter: 'nur-prio' });
+    expect(res.status).toBe(400);
+    expect(deps.einstellungen.set).not.toHaveBeenCalled();
+  });
+
+  it('PUT ⇒ 400 bei falschen Feldtypen im Filter (Liste statt Boolean, Zahl statt Liste)', async () => {
+    const deps = makeDeps();
+    for (const kaputt of [
+      { ...vollerFilter, nurPrio: ['ja'] },
+      { ...vollerFilter, projektArten: 3 },
+      { ...vollerFilter, projekt: 42 },
+      { ...vollerFilter, status: [7] },
+    ]) {
+      const res = await request(makeApp(deps, adminSession))
+        .put('/api/teamboard/einstellungen')
+        .send({ reihenfolge: null, ausgeblendet: [], filter: kaputt });
+      expect(res.status).toBe(400);
+    }
+    expect(deps.einstellungen.set).not.toHaveBeenCalled();
+  });
+
+  it('PUT ⇒ 400 bei mehr als 100 Filter-Werten oder überlangem Einzelwert (Speicher-Obergrenze wie bei den ID-Listen)', async () => {
+    const deps = makeDeps();
+    const zuViele = { ...vollerFilter, projektArten: Array.from({ length: 101 }, (_, i) => `Art ${i}`) };
+    const zuLang = { ...vollerFilter, arbeitsarten: ['x'.repeat(201)] };
+    for (const kaputt of [zuViele, zuLang]) {
+      const res = await request(makeApp(deps, adminSession))
+        .put('/api/teamboard/einstellungen')
+        .send({ reihenfolge: null, ausgeblendet: [], filter: kaputt });
+      expect(res.status).toBe(400);
+    }
+    expect(deps.einstellungen.set).not.toHaveBeenCalled();
   });
 
   it('PUT ⇒ 400 wenn reihenfolge kein Array ist', async () => {

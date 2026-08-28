@@ -77,6 +77,12 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_erledigungen_offen ON teamboard_erledigungen (kommentar_am, rueckgaengig_am, erledigt_am);
   CREATE INDEX idx_erledigungen_task ON teamboard_erledigungen (task_id, rueckgaengig_am, kommentar_am);
   `,
+  // v4: Filterleiste — gespeicherter Filter-Zustand je Nutzer.
+  // Bestehende Zeilen bekommen filter NULL; der Store liest das als "kein
+  // Filter aktiv" (s. core/teamboard-einstellungen.ts, parseFilter).
+  `
+  ALTER TABLE teamboard_einstellungen ADD COLUMN filter TEXT;
+  `,
 ];
 
 export function openDb(filePath: string): DatabaseSync {
