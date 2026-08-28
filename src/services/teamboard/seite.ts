@@ -237,6 +237,46 @@ export function istFilterAktiv(filter: TeamboardFilter): boolean {
 }
 
 /**
+ * Der tatsächlich angewandte Filter. Sind die Projekt-Stammdaten LEER,
+ * verhalten sich die zwei stammdatenabhängigen Dimensionen (Projekt-Art,
+ * "nur laufende Projekte") neutral; die übrigen fünf bleiben unberührt.
+ *
+ * Warum fail-open: die Stammdaten kommen aus einem eigenen awork-Endpunkt
+ * mit eigenem Cache und eigenem Fehler-Backoff (services/teamboard/
+ * projekte.ts). Hakt der nach einem Prozess-Neustart, liegt ein
+ * vollständiges Board vor, aber eine leere Projekt-Karte — und ein
+ * GESPEICHERTER Art-Filter würde dann jede Karte und jeden Timer wegwerfen.
+ * Der Wandmonitor zeigte je Backoff-Runde fünf Minuten leere Fläche,
+ * obwohl die Board-Daten vollständig da sind. Ein ungefiltertes Board ist
+ * ein wahres Board, ein leeres ein falsches.
+ *
+ * Bewusst NUR bei komplett leeren Stammdaten: ein einzelnes unbekanntes
+ * Projekt (seit dem letzten Abruf neu angelegt) ist kein Ausfall — dort
+ * bleibt "kennt die Art nicht" die richtige Antwort. Der Einzelprojekt-
+ * Filter braucht ohnehin keine Stammdaten und bleibt in jedem Fall aktiv.
+ *
+ * Sind Stammdaten da, kommt DERSELBE Filter zurück (keine Kopie) — die
+ * Funktion läuft einmal je zeichne(), nicht je Karte.
+ */
+export function wirksamerFilter(
+  filter: TeamboardFilter,
+  projekte: Record<string, { art: string | null; status: string | null }>
+): TeamboardFilter {
+  for (var id in projekte) {
+    if (Object.prototype.hasOwnProperty.call(projekte, id)) return filter;
+  }
+  return {
+    projektArten: [],
+    projekt: filter.projekt,
+    faelligkeit: filter.faelligkeit,
+    status: filter.status,
+    arbeitsarten: filter.arbeitsarten,
+    nurPrio: filter.nurPrio,
+    nurLaufendeProjekte: false,
+  };
+}
+
+/**
  * Der projektbezogene Teil des Filters (Projekt, Projekt-Art, nur laufende
  * Projekte) — das Einzige, was auch eine TIMER-Karte beantworten kann.
  * Kennen die Stammdaten das Projekt nicht (neu angelegt, awork-Ausfall),
@@ -313,6 +353,9 @@ export function aufgabePasst(
  *
  * heute kommt von außen (heuteAusStand) statt aus einer Uhr im Inneren —
  * sonst wäre die Funktion nicht rein und nicht deterministisch prüfbar.
+ *
+ * Fehlen die Projekt-Stammdaten ganz, wirken die zwei von ihnen abhängigen
+ * Dimensionen neutral (siehe wirksamerFilter).
  */
 export function wendeFilterAn(
   lanes: Lane[],
@@ -320,13 +363,17 @@ export function wendeFilterAn(
   filter: TeamboardFilter,
   heute: string
 ): Lane[] {
-  if (!istFilterAktiv(filter)) return lanes;
+  // Erst neutralisieren, dann prüfen, ob überhaupt noch etwas gesetzt ist:
+  // bleibt nach einem Stammdaten-Ausfall nichts übrig, kommen dieselben
+  // Lanes (dieselbe Referenz) zurück wie ohne Filter.
+  var wirksam = wirksamerFilter(filter, projekte);
+  if (!istFilterAktiv(wirksam)) return lanes;
   var sonntag = sonntagDerWoche(heute);
   var ergebnis: Lane[] = [];
   lanes.forEach(function (lane) {
-    var timerPasst = lane.timer !== null && projektPasst(lane.timer.projektId, projekte, filter);
+    var timerPasst = lane.timer !== null && projektPasst(lane.timer.projektId, projekte, wirksam);
     var gefilterteAufgaben = lane.aufgaben.filter(function (a) {
-      return projektPasst(a.projektId, projekte, filter) && aufgabePasst(a, filter, heute, sonntag);
+      return projektPasst(a.projektId, projekte, wirksam) && aufgabePasst(a, wirksam, heute, sonntag);
     });
     if (!timerPasst && gefilterteAufgaben.length === 0) return;
     ergebnis.push({
@@ -931,6 +978,8 @@ ${LOGO_SVG}
   ${String(sonntagDerWoche)}
 
   ${String(istFilterAktiv)}
+
+  ${String(wirksamerFilter)}
 
   ${String(projektPasst)}
 

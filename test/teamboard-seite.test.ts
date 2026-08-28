@@ -14,6 +14,7 @@ import {
   projektArtenAusBoard,
   arbeitsartenAusBoard,
   standardFilter,
+  wirksamerFilter,
   heuteAusStand,
   sonntagDerWoche,
   wendeFilterAn,
@@ -1544,6 +1545,104 @@ describe("wendeFilterAn (P1 — die Filterleiste auf die Lanes)", () => {
     });
   });
 
+  // ── Fehlende Projekt-Stammdaten: fail-open ──────────────────────────
+  //
+  // Die Stammdaten kommen aus einem EIGENEN awork-Endpunkt mit eigenem
+  // Backoff. Hakt der (Prozess-Neustart, /projects antwortet nicht), liegt
+  // ein vollständiges Board vor, aber eine leere Projekt-Karte — und ein
+  // GESPEICHERTER Art- oder "nur laufende Projekte"-Filter würde ohne diese
+  // Regel jede Karte und jeden Timer wegwerfen. Der Wandmonitor zeigte je
+  // Backoff-Runde fünf Minuten leere Fläche, obwohl die Board-Daten da sind.
+
+  describe("leere Projekt-Stammdaten (awork-Ausfall am /projects-Endpunkt)", () => {
+    const lanes: Lane[] = [
+      {
+        userId: "u-1",
+        name: "Anna",
+        timer: timerKarte({ projektId: "p-ziel" }),
+        aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-ziel" })],
+      },
+      {
+        userId: "u-2",
+        name: "Bea",
+        timer: null,
+        aufgaben: [aufgabeKarte({ id: "a-2", projektId: "p-fremd", istPrio: true })],
+      },
+    ];
+
+    it("lässt einen gesetzten Projekt-Art-Filter neutral wirken statt das Board zu leeren", () => {
+      const ergebnis = wendeFilterAn(lanes, {}, filter({ projektArten: ["Website-Support"] }), HEUTE);
+      // Unverändert, sogar dieselbe Referenz: ohne weitere Dimension ist der
+      // wirksame Filter leer.
+      expect(ergebnis).toBe(lanes);
+    });
+
+    it("lässt auch 'nur laufende Projekte' neutral wirken", () => {
+      expect(wendeFilterAn(lanes, {}, filter({ nurLaufendeProjekte: true }), HEUTE)).toBe(lanes);
+    });
+
+    it("filtert die übrigen Dimensionen trotzdem weiter — nur die zwei stammdatenabhängigen fallen aus", () => {
+      const ergebnis = wendeFilterAn(
+        lanes,
+        {},
+        filter({ projektArten: ["Website-Support"], nurLaufendeProjekte: true, nurPrio: true }),
+        HEUTE
+      );
+      // nurPrio wirkt weiter: die Nicht-Prio-Aufgabe von Anna fällt weg.
+      // Ihre Lane bleibt trotzdem stehen — der Timer beantwortet keine
+      // aufgabenbezogene Dimension und wird auch nicht mehr an "nur
+      // laufende Projekte" gemessen, weil dafür die Stammdaten fehlen.
+      expect(ergebnis).toHaveLength(2);
+      expect(ergebnis[0].userId).toBe("u-1");
+      expect(ergebnis[0].timer).not.toBeNull();
+      expect(ergebnis[0].aufgaben).toEqual([]);
+      expect(ergebnis[1].userId).toBe("u-2");
+      expect(ergebnis[1].aufgaben.map((a) => a.id)).toEqual(["a-2"]);
+    });
+
+    it("greift NUR bei komplett leeren Stammdaten — ein einzelnes unbekanntes Projekt bleibt streng draußen", () => {
+      // Ein seit dem letzten Stammdaten-Abruf neu angelegtes Projekt ist kein
+      // Ausfall: dort ist "kennt die Art nicht" die richtige Antwort.
+      const mitLuecke: Lane[] = [
+        {
+          userId: "u-1",
+          name: "Anna",
+          timer: null,
+          aufgaben: [aufgabeKarte({ id: "a-neu", projektId: "p-brandneu" })],
+        },
+      ];
+      expect(wendeFilterAn(mitLuecke, PROJEKTE, filter({ projektArten: ["Website-Support"] }), HEUTE)).toEqual([]);
+    });
+  });
+
+  describe("wirksamerFilter (P1 — was von einem Filter ohne Stammdaten übrig bleibt)", () => {
+    it("gibt bei vorhandenen Stammdaten denselben Filter zurück (dieselbe Referenz, keine Kopie je Karte)", () => {
+      const f = filter({ projektArten: ["Website-Support"], nurLaufendeProjekte: true });
+      expect(wirksamerFilter(f, PROJEKTE)).toBe(f);
+    });
+
+    it("streicht bei leeren Stammdaten genau die zwei stammdatenabhängigen Dimensionen", () => {
+      const f = filter({
+        projektArten: ["Website-Support"],
+        projekt: "p-ziel",
+        faelligkeit: ["heute"],
+        status: ["progress"],
+        arbeitsarten: ["Projektarbeit"],
+        nurPrio: true,
+        nurLaufendeProjekte: true,
+      });
+      expect(wirksamerFilter(f, {})).toEqual({
+        projektArten: [],
+        projekt: "p-ziel",
+        faelligkeit: ["heute"],
+        status: ["progress"],
+        arbeitsarten: ["Projektarbeit"],
+        nurPrio: true,
+        nurLaufendeProjekte: false,
+      });
+    });
+  });
+
   // ── Timer: nur die Dimensionen, die er beantworten kann ─────────────
 
   describe("Timer-Karte", () => {
@@ -1865,6 +1964,7 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
       "function heuteAusStand(",
       "function sonntagDerWoche(",
       "function istFilterAktiv(",
+      "function wirksamerFilter(",
       "function projektPasst(",
       "function aufgabePasst(",
       "function wendeFilterAn(",
