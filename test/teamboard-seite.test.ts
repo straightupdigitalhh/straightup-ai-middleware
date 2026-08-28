@@ -443,14 +443,22 @@ describe("renderSeite", () => {
     expect(dokumentKopf).toContain('<link rel="icon" href="data:image/png;base64,iVBORw0KGgo');
     // Logo als Inline-SVG im Kopfbereich, auf currentColor gestellt.
     expect(html).toContain('<svg class="logo" role="img" aria-label="straightup digital"');
-    expect(html).toContain("fill: currentColor;");
+    // Die Wortmarke färbt sich über currentColor — als Attribut an jedem
+    // Pfad, NICHT über einen <style>-Block im SVG. Ein <style> in Inline-SVG
+    // gilt dokumentweit, nicht SVG-lokal: ein künftig getauschtes Logo mit
+    // einem Selektor wie "text { … }" oder "path { … }" träfe damit die
+    // ganze Seite, und ein reiner Zähler-Pin finge genau das nicht.
+    expect(html).toContain('<path fill="currentColor"');
+    expect(html).not.toContain("cls-1");
     expect(html).toContain(".logo { height: 34px; width: auto; color: var(--tinte); flex: none; }");
     expect(html).toContain('<h1 class="bereich">Teamboard</h1>');
     // Der Logo-Block trägt weder einen zusätzlichen Script-Block noch
-    // Inline-Handler ins Dokument; die beiden Stylesheet-Blöcke sind der
-    // Seiten-Block und der aus der SVG-Vorlage.
+    // Inline-Handler ins Dokument. Stylesheet-Blöcke: genau EINER, der der
+    // Seite — jeder weitere wirkte global (siehe oben), deshalb ist 1 der
+    // richtige Sollwert und nicht bloß der zufällige Ist-Zustand.
     expect(html.split("</script>").length - 1).toBe(2);
-    expect(html.split("</style>").length - 1).toBe(2);
+    expect(html.split("</style>").length - 1).toBe(1);
+    expect(html.split("<style").length - 1).toBe(1);
     expect(html).not.toMatch(/\son\w+\s*=/);
     expect(html).not.toContain("__name(");
     expect(html).not.toMatch(/\.innerHTML\s*=/);
