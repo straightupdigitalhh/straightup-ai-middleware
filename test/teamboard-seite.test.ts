@@ -11,7 +11,12 @@ import {
   formatiereZeit,
   zeitFelder,
   projekteAusBoard,
-  wendeProjektFilterAn,
+  projektArtenAusBoard,
+  arbeitsartenAusBoard,
+  standardFilter,
+  heuteAusStand,
+  sonntagDerWoche,
+  wendeFilterAn,
   wendeEinstellungenAn,
   panelFelder,
   darfErledigen,
@@ -87,6 +92,64 @@ describe("renderSeite", () => {
       "proj-intern": { art: "straightup Projekt", status: "progress" },
     });
     expect(html).toContain('"projekte":{"proj-intern":{"art":"straightup Projekt","status":"progress"}}');
+  });
+
+  it("hält die Sicherheits-Pins auch bei feindlichen Projekt-Art-, Arbeitsart- und Projektnamen (Fremddaten aus awork)", () => {
+    const boesartig = "</script><b>x</b><style>body{display:none}</style>";
+    const feindlich: BoardStand = {
+      board: {
+        stand: "2026-08-28T10:00:00.000Z",
+        lanes: [
+          {
+            userId: "u-1",
+            name: "Lea Stöber",
+            timer: {
+              aufgabenName: boesartig,
+              aufgabenKennung: boesartig,
+              projektName: boesartig,
+              projektId: "p-boese",
+              sekunden: 60,
+              pausiert: false,
+            },
+            aufgaben: [
+              {
+                id: "a-1",
+                name: boesartig,
+                kennung: boesartig,
+                projektName: boesartig,
+                projektId: "p-boese",
+                statusName: boesartig,
+                statusTyp: boesartig,
+                faelligAm: null,
+                istPrio: true,
+                istWiederkehrend: false,
+                arbeitsart: boesartig,
+                assigneeIds: ["u-1"],
+                ueberfaellig: false,
+              },
+            ],
+          },
+        ],
+      },
+      alterSekunden: 0,
+    };
+    const html = renderSeite(feindlich, { aworkUserId: "u-1", istAdmin: true }, {
+      "p-boese": { art: boesartig, status: boesartig },
+    });
+    // Die Nutzlast steht nirgends wörtlich im Dokument — weder aus dem
+    // Board noch aus den Projekt-Stammdaten der Filterleiste.
+    expect(html).not.toContain(boesartig);
+    expect(html).not.toContain("<b>x</b>");
+    // Und die Zähler bleiben, wo sie sind.
+    expect(html.split("</script>").length - 1).toBe(2);
+    expect(html.split("</style>").length - 1).toBe(1);
+    expect(html.split("<style").length - 1).toBe(1);
+    expect(html).not.toMatch(/\son\w+\s*=/);
+    expect(html).not.toContain("__name(");
+    expect(html).not.toMatch(/\.innerHTML\s*=/);
+    // Escaped landet die Nutzlast trotzdem im Datenblock — der Client baut
+    // daraus per textContent Text, nie Markup.
+    expect(html).toContain("\\u003c/script>");
   });
 
   it("ist ein vollständiges HTML-Dokument mit Titel und Client-Skript", () => {
@@ -273,14 +336,22 @@ describe("renderSeite", () => {
     expect(zeichneBlock).not.toContain('el("div", "zeiten"');
   });
 
-  it("wendet in zeichne() erst den Projekt-Filter an und zeichnet danach (Task 9)", () => {
+  it("wendet in zeichne() erst die Filterleiste an und zeichnet danach (Task 9, seit der Filterleiste wendeFilterAn)", () => {
     const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
-    const filterPos = zeichneBlock!.indexOf("wendeProjektFilterAn(");
+    const filterPos = zeichneBlock!.indexOf("wendeFilterAn(");
     const forEachPos = zeichneBlock!.indexOf(".forEach(function (lane)");
     expect(filterPos).toBeGreaterThan(-1);
     expect(forEachPos).toBeGreaterThan(-1);
     expect(filterPos).toBeLessThan(forEachPos);
+    // "heute" kommt aus dem Board-Stand, nicht aus der Uhr des Betrachters:
+    // der Server hat mit genau diesem Zeitpunkt die ueberfaellig-Flags
+    // gesetzt — sonst fielen "überfällig" und "heute" auseinander.
+    expect(zeichneBlock).toContain("heuteAusStand(stand.board.stand)");
+    expect(zeichneBlock).toContain("einstellungen.filter");
+    // Und der alte Einzelzweck-Filter ist restlos weg (keine Leiche).
+    expect(html).not.toContain("wendeProjektFilterAn(");
+    expect(html).not.toContain("ausgewaehltesProjekt");
   });
 
   it("zeigt bei hinweis === 'kein_mapping' einmal im Kopfbereich den dezenten Hinweistext auf fehlendes awork-Mapping (Spec §5, Task 9)", () => {
@@ -293,28 +364,151 @@ describe("renderSeite", () => {
     expect(vorkommen).toBe(1);
   });
 
-  it("baut den Projekt-Filter als <select> im Kopfbereich per createElement aus projekteAusBoard, Auswahl in Client-Variable ohne Speichern (Task 9, Spec §6)", () => {
+  // ── Filterleiste (F2, 28.08.2026) ─────────────────────────────────────
+  // Wie überall in dieser Suite reine Text-Tripwires gegen den Quelltext des
+  // ausgelieferten Dokuments; das Laufzeitverhalten prüft der Mini-DOM-Lauf
+  // in scripts/filterleiste-dom-lauf.ts.
+
+  it("legt die Filterleiste als eigene Zeile unter den Kopfbereich, nicht mehr als <select> in die Kopfzeile", () => {
     const html = renderSeite(stand(), null, {});
-    expect(html).toContain('id="projekt-filter"');
-    expect(html).toContain('projekteAusBoard(stand.board)');
-    expect(html).toContain('document.createElement("option")');
-    // Client-Variable statt sofortigem Speichern — kein fetch(...PUT.../einstellungen) o.ä. im Filter-Codepfad.
-    // (Task 10 verdrahtet /api/teamboard/einstellungen an anderer Stelle
-    // fürs Drag-and-drop/Ausblenden — der Projekt-Filter-Listener selbst
-    // bleibt davon unberührt, daher die Prüfung block-lokal statt global.)
-    expect(html).toContain("var ausgewaehltesProjekt = null;");
-    const projektFilterListenerBlock = html
-      .split('document.getElementById("projekt-filter").addEventListener("change"')[1]
-      ?.split("});")[0];
-    expect(projektFilterListenerBlock).not.toContain("/api/teamboard/einstellungen");
+    expect(html).toContain('<div class="filterbereich"><div id="filterzeile" class="filterzeile"></div></div>');
+    // Der alte Einzel-Filter ist restlos aus dem Dokument verschwunden.
+    expect(html).not.toContain('id="projekt-filter"');
+    expect(html).not.toContain('id="projekt-chip"');
+    expect(html).not.toContain('document.createElement("option")');
+    // Die Leiste steht unter Banner und Zeiten-Hinweis: eine rote
+    // "awork nicht erreichbar"-Meldung bleibt das Erste unter dem Kopf.
+    const bannerPos = html.indexOf('<div id="banner">');
+    const leistePos = html.indexOf('<div class="filterbereich">');
+    const lanesPos = html.indexOf('<div id="lanes">');
+    expect(bannerPos).toBeLessThan(leistePos);
+    expect(leistePos).toBeLessThan(lanesPos);
   });
 
-  it("zeigt den aktiven Filter als Chip mit 'Filter aufheben'-Button per addEventListener, keine Inline-Handler-Attribute (Task 9)", () => {
+  it("baut alle sieben Dimensionen in der Reihenfolge des Auftrags in die Leiste", () => {
     const html = renderSeite(stand(), null, {});
-    expect(html).toContain("Filter aufheben");
-    expect(html).toContain('id="projekt-chip"');
-    // CSP: kein onclick=... im ausgelieferten HTML.
+    const leisteBlock = html.split("function baueFilterleiste()")[1]?.split("\n  }")[0];
+    const reihenfolge = [
+      '"projektArten",\n      "Projekt-Art"',
+      '"projekt",\n      "Projekt"',
+      '"faelligkeit",\n      "Fälligkeit"',
+      '"status",\n      "Aufgaben-Status"',
+      '"arbeitsarten",\n      "Arbeitsart"',
+    ];
+    let letzte = -1;
+    reihenfolge.forEach((teil) => {
+      const pos = leisteBlock!.indexOf(teil);
+      expect(pos).toBeGreaterThan(letzte);
+      letzte = pos;
+    });
+    // Die zwei Umschalt-Chips kommen dahinter.
+    expect(html).toContain('{ schluessel: "nurPrio", text: "nur Prio" }');
+    expect(html).toContain('{ schluessel: "nurLaufendeProjekte", text: "nur laufende Projekte" }');
+    // Die Werte der beiden geschlossenen Dimensionen, mit den gespeicherten
+    // Schlüsseln (statusTyp bzw. Fälligkeits-Topf).
+    expect(html).toContain('{ wert: "ueberfaellig", text: "überfällig", anzahl: null }');
+    expect(html).toContain('{ wert: "ohneTermin", text: "ohne Termin", anzahl: null }');
+    expect(html).toContain('{ wert: "todo", text: "To-do", anzahl: null }');
+    expect(html).toContain('{ wert: "stuck", text: "Blockiert", anzahl: null }');
+  });
+
+  it("baut Knöpfe, Panels und Chips ausschließlich per el()/textContent und addEventListener — keine Inline-Handler, kein innerHTML", () => {
+    const html = renderSeite(stand(), null, {});
+    const dimensionBlock = html.split("function baueDimension(")[1]?.split("\n  }")[0];
+    expect(dimensionBlock).toContain('el("button", "fdrop")');
+    expect(dimensionBlock).toContain('el("div", "fpanel")');
+    expect(dimensionBlock).toContain('el("span", "gewaehlt", String(anzahlGewaehlt))');
+    expect(dimensionBlock).toContain('document.createElement("input")');
+    expect(dimensionBlock).toContain('kasten.type = einzelwahl ? "radio" : "checkbox"');
+    expect(dimensionBlock).toContain('addEventListener("change"');
+    // Fremddaten (Projekt-Art-, Arbeitsart-, Projektnamen) gehen durch el(),
+    // das setzt textContent — nie als Markup.
+    expect(dimensionBlock).toContain('el("span", null, eintrag.text)');
+    const chipBlock = html.split("function baueFilterChip(")[1]?.split("\n  }")[0];
+    expect(chipBlock).toContain('el("span", "aktivchip")');
+    expect(chipBlock).toContain('el("button", "weg", "×")');
+    expect(chipBlock).toContain('addEventListener("click", aufEntfernen)');
     expect(html).not.toMatch(/\son\w+\s*=/);
+    expect(html).not.toMatch(/\.innerHTML\s*=/);
+  });
+
+  it("zeigt nur gewählte Filter als grüne Chips und den Zurücksetzen-Knopf nur bei aktivem Filter", () => {
+    const html = renderSeite(stand(), null, {});
+    const leisteBlock = html.split("function baueFilterleiste()")[1]?.split("\n  }")[0];
+    expect(leisteBlock).toContain('baueFilterChip("Art", wert');
+    expect(leisteBlock).toContain('baueFilterChip("Projekt"');
+    expect(leisteBlock).toContain('baueFilterChip("Fällig"');
+    expect(leisteBlock).toContain('baueFilterChip("Status"');
+    expect(leisteBlock).toContain('baueFilterChip("Arbeitsart", wert');
+    // Ein Umschalter steht AUS als .fchip in der Reihe und AN als Chip.
+    expect(leisteBlock).toContain('el("button", "fchip", schalter.text)');
+    expect(leisteBlock).toContain('baueFilterChip("", schalter.text');
+    // Ohne aktiven Filter kein Zurücksetzen-Knopf.
+    expect(leisteBlock).toContain("if (!istFilterAktiv(f)) return;");
+    expect(leisteBlock).toContain('el("button", "zuruecksetzen", "alle Filter zurücksetzen")');
+    expect(leisteBlock).toContain("setzeFilter(standardFilter())");
+  });
+
+  it("speichert den kompletten Filter-Zustand per PUT — der Projekt-Filter wandert bewusst mit (Aufhebung von Stufe-2-Spec §6, Entscheidung 28.08.2026)", () => {
+    const html = renderSeite(stand(), null, {});
+    // Jede Filter-Änderung läuft über setzeFilter; die schreibt in
+    // einstellungen.filter und sichert per PUT — anders als früher, wo der
+    // Projekt-Filter eine reine Client-Variable war.
+    const setzeBlock = html.split("function setzeFilter(neu)")[1]?.split("\n  }")[0];
+    expect(setzeBlock).toContain("filter: neu");
+    expect(setzeBlock).toContain("zeichne();");
+    expect(setzeBlock).toContain("speichereEinstellungen();");
+    // Die Begründung steht im Quelltext, damit sie beim nächsten Lesen da ist.
+    expect(html).toContain("Stufe-2-Spec §6");
+    // Startwert und Rückfallebene: leerer Filter — ohne Zutun ändert sich
+    // das heutige Verhalten nicht.
+    expect(html).toContain("var einstellungen = { reihenfolge: null, ausgeblendet: [], filter: standardFilter() };");
+    const ladeBlock = html.split("function ladeEinstellungen()")[1]?.split("\n  }")[0];
+    expect(ladeBlock).toContain("filter: antwort.filter || standardFilter()");
+    // Und Drag-and-drop/Ausblenden tragen den Filter unverändert weiter,
+    // statt ihn beim Speichern zu verlieren.
+    expect(html.split("filter: einstellungen.filter,").length - 1).toBe(3);
+  });
+
+  it("schließt ein offenes Filter-Panel bei Escape ZUERST — erst der nächste Escape erreicht das Detail-Panel", () => {
+    const html = renderSeite(stand(), null, {});
+    const escapeBlock = html.split('document.addEventListener("keydown"')[1]?.split("});")[0];
+    const filterPos = escapeBlock!.indexOf("offenesFilterPanel !== null");
+    const undoPos = escapeBlock!.indexOf("erledigt !== null && erledigt.vorgangId !== null");
+    const schliessenPos = escapeBlock!.indexOf("schliessePanel();");
+    expect(filterPos).toBeGreaterThan(-1);
+    // Der Filter-Zweig steht VOR der unveränderten Detail-Panel-Logik und
+    // steigt mit return aus — sonst schlösse ein Escape beides auf einmal.
+    expect(filterPos).toBeLessThan(undoPos);
+    expect(undoPos).toBeLessThan(schliessenPos);
+    expect(escapeBlock).toContain("return;");
+  });
+
+  it("schließt ein offenes Filter-Panel beim Klick außerhalb — Listener in der Capture-Phase", () => {
+    const html = renderSeite(stand(), null, {});
+    const klickBlock = html.split('document.addEventListener("click", function (ev) {')[1]?.split("}, true);")[0];
+    expect(klickBlock).toBeDefined();
+    expect(klickBlock).toContain("if (offenesFilterPanel === null) return;");
+    expect(klickBlock).toContain('document.getElementById("filterzeile").contains(ev.target)');
+    // Capture-Phase: der Klick auf einen Knopf IN der Leiste baut sie neu
+    // auf; in der Bubble-Phase wäre ev.target dann losgelöst und das
+    // gerade geöffnete Panel schlösse sich sofort wieder.
+    expect(html).toContain("}, true);");
+  });
+
+  it("übernimmt Optik und Klassennamen der Filterleiste aus dem abgenommenen Mockup (F2), nur mit vorhandenen Farb-Tokens", () => {
+    const html = renderSeite(stand(), null, {});
+    expect(html).toContain(".filterbereich { padding: 10px 24px 0; }");
+    expect(html).toContain(".fgruppe { position: relative; display: inline-flex; }");
+    expect(html).toContain(".fdrop .pfeil { color: var(--gedeckt); font-size: 10px; }");
+    expect(html).toContain(".fpanel label:hover");
+    expect(html).toContain(".fpanel .anzahl { margin-left: auto; color: var(--gedeckt); font-size: 11px; }");
+    expect(html).toContain(".aktivchip b {");
+    expect(html).toContain(".zuruecksetzen {");
+    // Keine neu erfundenen Farbwerte in der Leiste — nur Tokens.
+    const leistenCss = html.split("/* ─── Filterleiste (F2")[1]?.split("#banner {")[0];
+    expect(leistenCss).toBeDefined();
+    expect(leistenCss).not.toMatch(/#[0-9a-fA-F]{3,6}\b/);
   });
 
   // ── Task 10: Persönliche Ansicht — Drag-and-drop, Ausblenden, Mapping-UI ──
@@ -371,11 +565,11 @@ describe("renderSeite", () => {
     expect(html).not.toMatch(/\.innerHTML\s*=/);
   });
 
-  it("wendet in zeichne() erst wendeEinstellungenAn und danach wendeProjektFilterAn an, bevor gezeichnet wird (Task 10)", () => {
+  it("wendet in zeichne() erst wendeEinstellungenAn und danach wendeFilterAn an, bevor gezeichnet wird (Task 10)", () => {
     const html = renderSeite(stand(), null, {});
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
     const einstellungenPos = zeichneBlock!.indexOf("wendeEinstellungenAn(");
-    const filterPos = zeichneBlock!.indexOf("wendeProjektFilterAn(");
+    const filterPos = zeichneBlock!.indexOf("wendeFilterAn(");
     const forEachPos = zeichneBlock!.indexOf(".forEach(function (lane)");
     expect(einstellungenPos).toBeGreaterThan(-1);
     expect(filterPos).toBeGreaterThan(-1);
@@ -899,51 +1093,562 @@ describe("projekteAusBoard (P1 — Projekt-Filter-Liste, Task 9)", () => {
   });
 });
 
-describe("wendeProjektFilterAn (P1 — Projekt-Filter auf die Lanes, Task 9)", () => {
-  it("liefert die Lanes unverändert (dieselbe Referenz), wenn kein Projekt gewählt ist (null)", () => {
-    const lanes: Lane[] = [{ userId: "u-1", name: "A", timer: null, aufgaben: [] }];
-    expect(wendeProjektFilterAn(lanes, null)).toBe(lanes);
+// ─── Fixtures für die Filterleiste ─────────────────────────────────────────
+
+function filter(teile: Partial<ReturnType<typeof standardFilter>> = {}) {
+  return { ...standardFilter(), ...teile };
+}
+
+/** Stammdaten der Projekte, die in den Filter-Fixtures vorkommen. */
+const PROJEKTE = {
+  "p-ziel": { art: "Website-Support", status: "progress" },
+  "p-fremd": { art: "Website-Erstellung", status: "closed" },
+  "p-ohne-art": { art: null, status: "progress" },
+};
+
+const HEUTE = "2026-08-28"; // Freitag
+const SONNTAG = "2026-08-30";
+
+describe("standardFilter (P1 — Startwert der Filterleiste)", () => {
+  it("ist überall leer — ohne Zutun ändert sich das heutige Verhalten nicht", () => {
+    expect(standardFilter()).toEqual({
+      projektArten: [],
+      projekt: null,
+      faelligkeit: [],
+      status: [],
+      arbeitsarten: [],
+      nurPrio: false,
+      nurLaufendeProjekte: false,
+    });
   });
 
-  it("Lane mit fremdem Timer + passender Aufgabe bleibt mit timer: null", () => {
+  it("liefert bei jedem Aufruf frische Listen (kein geteiltes Array zwischen zwei Aufrufern)", () => {
+    const a = standardFilter();
+    a.projektArten.push("x");
+    expect(standardFilter().projektArten).toEqual([]);
+  });
+});
+
+describe("heuteAusStand (P1 — Berliner Kalendertag aus dem Board-Stand)", () => {
+  it("nimmt den Tag aus dem Stand, nicht aus der Uhr des Betrachters", () => {
+    expect(heuteAusStand("2026-08-28T10:00:00.000Z")).toBe("2026-08-28");
+  });
+
+  it("rechnet den UTC-Stempel nach Europe/Berlin um — 22:30 UTC ist dort schon der nächste Tag (Sommerzeit)", () => {
+    expect(heuteAusStand("2026-08-28T22:30:00.000Z")).toBe("2026-08-29");
+  });
+
+  it("liefert eine leere Zeichenkette statt eines Fantasiedatums bei unlesbarem Stand", () => {
+    expect(heuteAusStand("kein-datum")).toBe("");
+  });
+});
+
+describe("sonntagDerWoche (P1 — obere Grenze der Dimension 'diese Woche')", () => {
+  it("Freitag → Sonntag derselben Woche", () => {
+    expect(sonntagDerWoche("2026-08-28")).toBe("2026-08-30");
+  });
+
+  it("Montag → Sonntag derselben Woche", () => {
+    expect(sonntagDerWoche("2026-08-24")).toBe("2026-08-30");
+  });
+
+  it("Sonntag bleibt Sonntag (Mo–So-Wochendefinition wie in zeiten.ts)", () => {
+    expect(sonntagDerWoche("2026-08-30")).toBe("2026-08-30");
+  });
+
+  it("liefert eine leere Zeichenkette bei unlesbarem Tag", () => {
+    expect(sonntagDerWoche("kein-datum")).toBe("");
+  });
+});
+
+describe("projektArtenAusBoard (P1 — Werte des Projekt-Art-Panels mit Projektanzahl)", () => {
+  it("zählt die Projekte je Art, alphabetisch sortiert, Projekte ohne Art bleiben draußen", () => {
+    const board: Board = {
+      stand: "2026-08-28T10:00:00.000Z",
+      lanes: [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: timerKarte({ projektId: "p-fremd" }),
+          aufgaben: [
+            aufgabeKarte({ id: "a-1", projektId: "p-ziel" }),
+            // Zweite Karte im selben Projekt — gezählt werden PROJEKTE, nicht Karten.
+            aufgabeKarte({ id: "a-2", projektId: "p-ziel" }),
+            aufgabeKarte({ id: "a-3", projektId: "p-ohne-art" }),
+          ],
+        },
+      ],
+    };
+    expect(projektArtenAusBoard(board, PROJEKTE)).toEqual([
+      { wert: "Website-Erstellung", anzahl: 1 },
+      { wert: "Website-Support", anzahl: 1 },
+    ]);
+  });
+
+  it("übersteht einen Art-Namen, der wie eine Objekt-Eigenschaft heißt (__proto__ aus awork)", () => {
+    const board: Board = {
+      stand: "2026-08-28T10:00:00.000Z",
+      lanes: [{ userId: "u-1", name: "A", timer: null, aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-x" })] }],
+    };
+    expect(projektArtenAusBoard(board, { "p-x": { art: "__proto__", status: "progress" } })).toEqual([
+      { wert: "__proto__", anzahl: 1 },
+    ]);
+  });
+
+  it("liefert eine leere Liste, wenn keine Stammdaten da sind (awork-Ausfall)", () => {
+    const board: Board = {
+      stand: "2026-08-28T10:00:00.000Z",
+      lanes: [{ userId: "u-1", name: "A", timer: null, aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-ziel" })] }],
+    };
+    expect(projektArtenAusBoard(board, {})).toEqual([]);
+  });
+});
+
+describe("arbeitsartenAusBoard (P1 — Werte des Arbeitsart-Panels)", () => {
+  it("sammelt die Arbeitsarten der Karten distinct und alphabetisch; Karten ohne bleiben draußen", () => {
+    const board: Board = {
+      stand: "2026-08-28T10:00:00.000Z",
+      lanes: [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: null,
+          aufgaben: [
+            aufgabeKarte({ id: "a-1", arbeitsart: "Vertriebstätigkeit" }),
+            aufgabeKarte({ id: "a-2", arbeitsart: "Interne Arbeit" }),
+            aufgabeKarte({ id: "a-3", arbeitsart: null }),
+          ],
+        },
+        {
+          userId: "u-2",
+          name: "B",
+          timer: null,
+          aufgaben: [aufgabeKarte({ id: "a-4", arbeitsart: "Interne Arbeit" })],
+        },
+      ],
+    };
+    expect(arbeitsartenAusBoard(board)).toEqual(["Interne Arbeit", "Vertriebstätigkeit"]);
+  });
+
+  it("liefert eine leere Liste ohne Karten", () => {
+    expect(arbeitsartenAusBoard({ stand: "2026-08-28T10:00:00.000Z", lanes: [] })).toEqual([]);
+  });
+});
+
+describe("wendeFilterAn (P1 — die Filterleiste auf die Lanes)", () => {
+  it("liefert die Lanes unverändert (dieselbe Referenz), solange keine Dimension gesetzt ist", () => {
+    const lanes: Lane[] = [{ userId: "u-1", name: "A", timer: null, aufgaben: [] }];
+    expect(wendeFilterAn(lanes, PROJEKTE, standardFilter(), HEUTE)).toBe(lanes);
+  });
+
+  // ── Dimension 1: Projekt-Art ────────────────────────────────────────
+
+  describe("Projekt-Art", () => {
+    it("behält nur Karten aus Projekten der gewählten Art", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: null,
+          aufgaben: [
+            aufgabeKarte({ id: "a-1", projektId: "p-ziel" }),
+            aufgabeKarte({ id: "a-2", projektId: "p-fremd" }),
+          ],
+        },
+      ];
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ projektArten: ["Website-Support"] }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["a-1"]);
+    });
+
+    it("mehrere Arten sind ODER-verknüpft", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: null,
+          aufgaben: [
+            aufgabeKarte({ id: "a-1", projektId: "p-ziel" }),
+            aufgabeKarte({ id: "a-2", projektId: "p-fremd" }),
+            aufgabeKarte({ id: "a-3", projektId: "p-ohne-art" }),
+          ],
+        },
+      ];
+      const ergebnis = wendeFilterAn(
+        lanes,
+        PROJEKTE,
+        filter({ projektArten: ["Website-Support", "Website-Erstellung"] }),
+        HEUTE
+      );
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["a-1", "a-2"]);
+    });
+
+    it("Karten ohne Projekt und Projekte ohne Art fallen bei gesetzter Art heraus", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: null,
+          aufgaben: [
+            aufgabeKarte({ id: "a-1", projektId: null }),
+            aufgabeKarte({ id: "a-2", projektId: "p-ohne-art" }),
+            aufgabeKarte({ id: "a-3", projektId: "p-unbekannt" }),
+          ],
+        },
+      ];
+      expect(wendeFilterAn(lanes, PROJEKTE, filter({ projektArten: ["Website-Support"] }), HEUTE)).toEqual([]);
+    });
+
+    it("wirft auch die Timer-Karte weg, wenn deren Projekt die Art nicht trägt", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: timerKarte({ projektId: "p-fremd" }),
+          aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-ziel" })],
+        },
+      ];
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ projektArten: ["Website-Support"] }), HEUTE);
+      expect(ergebnis[0].timer).toBeNull();
+    });
+  });
+
+  // ── Dimension 2: Projekt (Verhalten des bestehenden Filters) ────────
+
+  describe("Projekt (unverändertes Verhalten des bestehenden Einzelprojekt-Filters)", () => {
+    it("Lane mit fremdem Timer + passender Aufgabe bleibt mit timer: null", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: timerKarte({ projektId: "p-fremd" }),
+          aufgaben: [
+            aufgabeKarte({ id: "a-1", projektId: "p-ziel" }),
+            aufgabeKarte({ id: "a-2", projektId: "p-fremd" }),
+          ],
+        },
+      ];
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ projekt: "p-ziel" }), HEUTE);
+      expect(ergebnis).toHaveLength(1);
+      expect(ergebnis[0].timer).toBeNull();
+      expect(ergebnis[0].aufgaben).toEqual([aufgabeKarte({ id: "a-1", projektId: "p-ziel" })]);
+    });
+
+    it("behält die Timer-Karte, wenn deren eigenes Projekt zum Filter passt", () => {
+      const lanes: Lane[] = [
+        { userId: "u-1", name: "A", timer: timerKarte({ projektId: "p-ziel" }), aufgaben: [] },
+      ];
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ projekt: "p-ziel" }), HEUTE);
+      expect(ergebnis).toHaveLength(1);
+      expect(ergebnis[0].timer).not.toBeNull();
+      expect(ergebnis[0].timer?.projektId).toBe("p-ziel");
+    });
+
+    it("lässt eine Lane ohne Treffer (weder Timer noch Aufgabe im Projekt) komplett raus", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: timerKarte({ projektId: "p-fremd" }),
+          aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-fremd" })],
+        },
+        { userId: "u-2", name: "B", timer: null, aufgaben: [] },
+      ];
+      expect(wendeFilterAn(lanes, PROJEKTE, filter({ projekt: "p-ziel" }), HEUTE)).toEqual([]);
+    });
+
+    it("filtert auch ohne bekannte Stammdaten korrekt — der Projekt-Filter braucht nur die ID an der Karte", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: null,
+          aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-ziel" }), aufgabeKarte({ id: "a-2", projektId: "p-fremd" })],
+        },
+      ];
+      const ergebnis = wendeFilterAn(lanes, {}, filter({ projekt: "p-ziel" }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["a-1"]);
+    });
+  });
+
+  // ── Dimension 3: Fälligkeit ─────────────────────────────────────────
+
+  describe("Fälligkeit", () => {
     const lanes: Lane[] = [
       {
         userId: "u-1",
         name: "A",
-        timer: timerKarte({ projektId: "p-fremd" }),
+        timer: null,
         aufgaben: [
-          aufgabeKarte({ id: "a-1", projektId: "p-ziel" }),
-          aufgabeKarte({ id: "a-2", projektId: "p-fremd" }),
+          aufgabeKarte({ id: "ueber", faelligAm: "2026-08-25T00:00:00.000Z", ueberfaellig: true }),
+          aufgabeKarte({ id: "heute", faelligAm: "2026-08-28T00:00:00.000Z" }),
+          aufgabeKarte({ id: "sonntag", faelligAm: "2026-08-30T00:00:00.000Z" }),
+          aufgabeKarte({ id: "montag", faelligAm: "2026-08-31T00:00:00.000Z" }),
+          aufgabeKarte({ id: "ohne", faelligAm: null }),
         ],
       },
     ];
-    const ergebnis = wendeProjektFilterAn(lanes, "p-ziel");
-    expect(ergebnis).toHaveLength(1);
-    expect(ergebnis[0].timer).toBeNull();
-    expect(ergebnis[0].aufgaben).toEqual([aufgabeKarte({ id: "a-1", projektId: "p-ziel" })]);
+
+    it("überfällig nimmt genau die Karten mit dem vorhandenen ueberfaellig-Flag", () => {
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ faelligkeit: ["ueberfaellig"] }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["ueber"]);
+    });
+
+    it("heute nimmt genau die Karten mit dem heutigen Datum", () => {
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ faelligkeit: ["heute"] }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["heute"]);
+    });
+
+    it("diese Woche reicht bis einschließlich Sonntag — der Montag danach fällt heraus", () => {
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ faelligkeit: ["woche"] }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["ueber", "heute", "sonntag"]);
+      expect(sonntagDerWoche(HEUTE)).toBe(SONNTAG);
+    });
+
+    it("ohne Termin nimmt genau die Karten ohne Fälligkeitsdatum", () => {
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ faelligkeit: ["ohneTermin"] }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["ohne"]);
+    });
+
+    it("mehrere Fälligkeiten sind ODER-verknüpft", () => {
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ faelligkeit: ["heute", "ohneTermin"] }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["heute", "ohne"]);
+    });
   });
 
-  it("behält die Timer-Karte, wenn deren eigenes Projekt zum Filter passt", () => {
-    const lanes: Lane[] = [
-      { userId: "u-1", name: "A", timer: timerKarte({ projektId: "p-ziel" }), aufgaben: [] },
-    ];
-    const ergebnis = wendeProjektFilterAn(lanes, "p-ziel");
-    expect(ergebnis).toHaveLength(1);
-    expect(ergebnis[0].timer).not.toBeNull();
-    expect(ergebnis[0].timer?.projektId).toBe("p-ziel");
-  });
+  // ── Dimension 4: Aufgaben-Status ────────────────────────────────────
 
-  it("lässt eine Lane ohne Treffer (weder Timer noch Aufgabe im Projekt) komplett raus", () => {
+  describe("Aufgaben-Status", () => {
     const lanes: Lane[] = [
       {
         userId: "u-1",
         name: "A",
-        timer: timerKarte({ projektId: "p-fremd" }),
-        aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-fremd" })],
+        timer: null,
+        aufgaben: [
+          aufgabeKarte({ id: "todo", statusTyp: "todo" }),
+          aufgabeKarte({ id: "progress", statusTyp: "progress" }),
+          aufgabeKarte({ id: "review", statusTyp: "review" }),
+          aufgabeKarte({ id: "stuck", statusTyp: "stuck" }),
+        ],
       },
-      { userId: "u-2", name: "B", timer: null, aufgaben: [] },
     ];
-    expect(wendeProjektFilterAn(lanes, "p-ziel")).toEqual([]);
+
+    it("nimmt genau die Karten mit dem gewählten statusTyp", () => {
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ status: ["review"] }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["review"]);
+    });
+
+    it("mehrere Status sind ODER-verknüpft", () => {
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ status: ["todo", "stuck"] }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["todo", "stuck"]);
+    });
+  });
+
+  // ── Dimension 5: Arbeitsart ─────────────────────────────────────────
+
+  describe("Arbeitsart", () => {
+    const lanes: Lane[] = [
+      {
+        userId: "u-1",
+        name: "A",
+        timer: null,
+        aufgaben: [
+          aufgabeKarte({ id: "intern", arbeitsart: "Interne Arbeit" }),
+          aufgabeKarte({ id: "projekt", arbeitsart: "Projektarbeit" }),
+          aufgabeKarte({ id: "ohne", arbeitsart: null }),
+        ],
+      },
+    ];
+
+    it("nimmt genau die Karten mit der gewählten Arbeitsart", () => {
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ arbeitsarten: ["Projektarbeit"] }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["projekt"]);
+    });
+
+    it("Karten ohne Arbeitsart fallen bei gesetzter Arbeitsart heraus", () => {
+      const ergebnis = wendeFilterAn(
+        lanes,
+        PROJEKTE,
+        filter({ arbeitsarten: ["Interne Arbeit", "Projektarbeit"] }),
+        HEUTE
+      );
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["intern", "projekt"]);
+    });
+  });
+
+  // ── Dimension 6: nur Prio ───────────────────────────────────────────
+
+  describe("nur Prio", () => {
+    it("behält genau die Prio-Karten", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: null,
+          aufgaben: [
+            aufgabeKarte({ id: "prio", istPrio: true }),
+            aufgabeKarte({ id: "normal", istPrio: false }),
+          ],
+        },
+      ];
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ nurPrio: true }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["prio"]);
+    });
+  });
+
+  // ── Dimension 7: nur laufende Projekte ──────────────────────────────
+
+  describe("nur laufende Projekte", () => {
+    it("behält nur Karten aus Projekten mit Status-Typ progress", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: null,
+          aufgaben: [
+            aufgabeKarte({ id: "laufend", projektId: "p-ziel" }),
+            aufgabeKarte({ id: "abgeschlossen", projektId: "p-fremd" }),
+            aufgabeKarte({ id: "ohne-projekt", projektId: null }),
+          ],
+        },
+      ];
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ nurLaufendeProjekte: true }), HEUTE);
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["laufend"]);
+    });
+
+    it("ist standardmäßig aus — ohne Zutun ändert sich das heutige Verhalten nicht", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: null,
+          aufgaben: [aufgabeKarte({ id: "abgeschlossen", projektId: "p-fremd" })],
+        },
+      ];
+      expect(wendeFilterAn(lanes, PROJEKTE, standardFilter(), HEUTE)).toBe(lanes);
+    });
+  });
+
+  // ── Timer: nur die Dimensionen, die er beantworten kann ─────────────
+
+  describe("Timer-Karte", () => {
+    it("bleibt bei aufgabenbezogenen Dimensionen stehen — der Timer trägt weder Status noch Fälligkeit, Prio oder Arbeitsart", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: timerKarte({ projektId: "p-ziel" }),
+          aufgaben: [aufgabeKarte({ id: "prio", projektId: "p-ziel", istPrio: true })],
+        },
+      ];
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ nurPrio: true }), HEUTE);
+      expect(ergebnis[0].timer).not.toBeNull();
+    });
+
+    it("hält eine Lane allein — sie zeigt, woran gerade gearbeitet wird", () => {
+      const lanes: Lane[] = [
+        { userId: "u-1", name: "A", timer: timerKarte({ projektId: "p-ziel" }), aufgaben: [] },
+      ];
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ nurPrio: true }), HEUTE);
+      expect(ergebnis).toHaveLength(1);
+      expect(ergebnis[0].aufgaben).toEqual([]);
+    });
+
+    it("fällt bei nur laufenden Projekten weg, wenn sein eigenes Projekt abgeschlossen ist", () => {
+      const lanes: Lane[] = [
+        {
+          userId: "u-1",
+          name: "A",
+          timer: timerKarte({ projektId: "p-fremd" }),
+          aufgaben: [aufgabeKarte({ id: "a-1", projektId: "p-ziel" })],
+        },
+      ];
+      const ergebnis = wendeFilterAn(lanes, PROJEKTE, filter({ nurLaufendeProjekte: true }), HEUTE);
+      expect(ergebnis[0].timer).toBeNull();
+    });
+  });
+
+  // ── Kombination: zwischen den Dimensionen gilt UND ───────────────────
+
+  describe("Kombination", () => {
+    const lanes: Lane[] = [
+      {
+        userId: "u-1",
+        name: "Anna",
+        timer: null,
+        aufgaben: [
+          // Trifft alles: laufendes Website-Support-Projekt, heute fällig,
+          // In Bearbeitung, Projektarbeit, Prio.
+          aufgabeKarte({
+            id: "voll",
+            projektId: "p-ziel",
+            faelligAm: "2026-08-28T00:00:00.000Z",
+            statusTyp: "progress",
+            arbeitsart: "Projektarbeit",
+            istPrio: true,
+          }),
+          // Wie oben, aber ohne Prio.
+          aufgabeKarte({
+            id: "ohne-prio",
+            projektId: "p-ziel",
+            faelligAm: "2026-08-28T00:00:00.000Z",
+            statusTyp: "progress",
+            arbeitsart: "Projektarbeit",
+            istPrio: false,
+          }),
+          // Wie oben, aber falsche Arbeitsart.
+          aufgabeKarte({
+            id: "andere-arbeitsart",
+            projektId: "p-ziel",
+            faelligAm: "2026-08-28T00:00:00.000Z",
+            statusTyp: "progress",
+            arbeitsart: "Interne Arbeit",
+            istPrio: true,
+          }),
+        ],
+      },
+      {
+        userId: "u-2",
+        name: "Bea",
+        timer: null,
+        // Alles richtig, nur das Projekt ist abgeschlossen.
+        aufgaben: [
+          aufgabeKarte({
+            id: "falsches-projekt",
+            projektId: "p-fremd",
+            faelligAm: "2026-08-28T00:00:00.000Z",
+            statusTyp: "progress",
+            arbeitsart: "Projektarbeit",
+            istPrio: true,
+          }),
+        ],
+      },
+    ];
+
+    it("verknüpft alle sieben Dimensionen mit UND und blendet Lanes ohne Treffer aus", () => {
+      const ergebnis = wendeFilterAn(
+        lanes,
+        PROJEKTE,
+        filter({
+          projektArten: ["Website-Support"],
+          projekt: "p-ziel",
+          faelligkeit: ["heute"],
+          status: ["progress"],
+          arbeitsarten: ["Projektarbeit"],
+          nurPrio: true,
+          nurLaufendeProjekte: true,
+        }),
+        HEUTE
+      );
+      expect(ergebnis).toHaveLength(1);
+      expect(ergebnis[0].userId).toBe("u-1");
+      expect(ergebnis[0].aufgaben.map((a) => a.id)).toEqual(["voll"]);
+    });
+
+    it("lässt die Eingabe-Lanes unangetastet (reine Funktion)", () => {
+      const vorher = JSON.stringify(lanes);
+      wendeFilterAn(lanes, PROJEKTE, filter({ nurPrio: true }), HEUTE);
+      expect(JSON.stringify(lanes)).toBe(vorher);
+    });
   });
 });
 
@@ -1119,7 +1824,7 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
     expect(html).not.toContain("__name(");
   });
 
-  it("enthält auch formatiereZeit, zeitFelder, projekteAusBoard und wendeProjektFilterAn (Task 9, zeitFelder seit dem Facelift), weiterhin ohne __name(", () => {
+  it("enthält auch formatiereZeit, zeitFelder und projekteAusBoard (Task 9, zeitFelder seit dem Facelift), weiterhin ohne __name(", () => {
     const html = renderSeite(stand(), null, {});
     expect(html).toContain("function formatiereZeit(");
     expect(html).toContain("function zeitFelder(");
@@ -1127,11 +1832,39 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
     // Fließtext-Variante darf nicht als Leiche im Client-Skript bleiben.
     expect(html).not.toContain("function zeitZeile(");
     expect(html).toContain("function projekteAusBoard(");
-    expect(html).toContain("function wendeProjektFilterAn(");
+    // wendeProjektFilterAn ist in wendeFilterAn aufgegangen (Filterleiste).
+    expect(html).not.toContain("function wendeProjektFilterAn(");
     expect(html).not.toContain("__name(");
     // </script>-Zähler bleibt bei 2 (Daten-Skript + Client-Skript) — die
     // zusätzliche Einbettung darf keinen dritten Script-Block erzeugen.
     expect(html.split("</script>").length - 1).toBe(2);
+  });
+
+  it("enthält die acht Funktionen der Filterleiste — ohne die Einbettung gäbe es sie im Browser gar nicht, weiterhin ohne __name(, ohne dritten Script-Block und ohne innerHTML", () => {
+    const html = renderSeite(stand(), null, {});
+    [
+      "function projektArtenAusBoard(",
+      "function arbeitsartenAusBoard(",
+      "function standardFilter(",
+      "function heuteAusStand(",
+      "function sonntagDerWoche(",
+      "function istFilterAktiv(",
+      "function projektPasst(",
+      "function aufgabePasst(",
+      "function wendeFilterAn(",
+    ].forEach((quelltext) => {
+      expect(html).toContain(quelltext);
+    });
+    // Die Falle aus dem P1-Fund: eine verschachtelte BENANNTE Funktion in
+    // einer der eingebetteten Funktionen ließe esbuilds keepNames-Transform
+    // ein __name(...) einbauen — im Browser ein ReferenceError beim ersten
+    // Aufruf. wendeFilterAn ruft projektPasst/aufgabePasst/sonntagDerWoche
+    // deshalb als Geschwister auf derselben Ebene auf.
+    expect(html).not.toContain("__name(");
+    expect(html.split("</script>").length - 1).toBe(2);
+    expect(html.split("</style>").length - 1).toBe(1);
+    expect(html).not.toMatch(/\.innerHTML\s*=/);
+    expect(html).not.toMatch(/\son\w+\s*=/);
   });
 
   it("enthält auch wendeEinstellungenAn (Task 10), weiterhin ohne __name( und ohne dritten Script-Block", () => {
