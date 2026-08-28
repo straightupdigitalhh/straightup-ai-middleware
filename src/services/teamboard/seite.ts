@@ -640,6 +640,7 @@ export function renderSeite(
   }
   .fpanel label:hover { background: color-mix(in srgb, var(--tinte) 5%, transparent); }
   .fpanel .anzahl { margin-left: auto; color: var(--gedeckt); font-size: 11px; }
+  .fpanel .fkopf { padding: 2px 8px 6px; color: var(--gedeckt); font-size: 11px; }
   .fpanel input { accent-color: var(--aktiv); }
   .fchip {
     border: 1px solid var(--linie); background: transparent; color: var(--tinte);
@@ -1325,6 +1326,17 @@ ${LOGO_SVG}
     if (offenesFilterPanel !== schluessel) return gruppe;
     var panel = el("div", "fpanel");
     if (eintraege.length === 0) panel.appendChild(el("div", "leer", "keine Werte im Board"));
+    // Zahlen im Panel zählen die Projekte IM BOARD, nicht die des
+    // Workspaces — die Board-Antwort trägt bewusst nur die Projekte, die im
+    // Board vorkommen. Ohne diese Zeile erwartete jemand bei
+    // "Website-Support" die 58 aus awork und sähe eine 7. Die Beschriftung
+    // hängt an der Existenz von Zahlen statt an einem Parameter je
+    // Aufrufstelle: so kann sie nicht vergessen werden, wenn später eine
+    // weitere Dimension Zahlen bekommt.
+    var mitZahlen = eintraege.some(function (eintrag) {
+      return eintrag.anzahl !== null;
+    });
+    if (mitZahlen) panel.appendChild(el("div", "fkopf", "Zahlen = Projekte im Board"));
     eintraege.forEach(function (eintrag) {
       var zeile = document.createElement("label");
       var kasten = document.createElement("input");

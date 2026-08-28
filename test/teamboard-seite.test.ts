@@ -433,6 +433,20 @@ describe("renderSeite", () => {
     expect(html).not.toMatch(/\.innerHTML\s*=/);
   });
 
+  it("beschriftet die Zahlen im Panel als Board-Zahlen — niemand soll die Workspace-Zahl erwarten und die Board-Zahl sehen", () => {
+    const html = renderSeite(stand(), null, {});
+    const dimensionBlock = html.split("function baueDimension(")[1]?.split("\n  }")[0];
+    // Zahlen gibt es nur beim Projekt-Art-Panel, und sie zählen die
+    // Projekte IM BOARD, nicht die des Workspaces (die Board-Antwort trägt
+    // bewusst nur die Projekte, die im Board vorkommen).
+    expect(dimensionBlock).toContain('el("div", "fkopf", "Zahlen = Projekte im Board")');
+    // Die Beschriftung hängt an der Existenz von Zahlen, nicht an einem
+    // zusätzlichen Parameter je Aufrufstelle — sie kann damit nicht
+    // vergessen werden, wenn später eine Dimension Zahlen bekommt.
+    expect(dimensionBlock).toContain("eintrag.anzahl !== null");
+    expect(html).toContain(".fpanel .fkopf {");
+  });
+
   it("zeigt nur gewählte Filter als grüne Chips und den Zurücksetzen-Knopf nur bei aktivem Filter", () => {
     const html = renderSeite(stand(), null, {});
     const leisteBlock = html.split("function baueFilterleiste()")[1]?.split("\n  }")[0];
@@ -1955,7 +1969,7 @@ describe("Client-Funktionen im gerenderten HTML eingebettet (P1)", () => {
     expect(html.split("</script>").length - 1).toBe(2);
   });
 
-  it("enthält die acht Funktionen der Filterleiste — ohne die Einbettung gäbe es sie im Browser gar nicht, weiterhin ohne __name(, ohne dritten Script-Block und ohne innerHTML", () => {
+  it("enthält jede eingebettete Funktion der Filterleiste — ohne die Einbettung gäbe es sie im Browser gar nicht, weiterhin ohne __name(, ohne dritten Script-Block und ohne innerHTML", () => {
     const html = renderSeite(stand(), null, {});
     [
       "function projektArtenAusBoard(",

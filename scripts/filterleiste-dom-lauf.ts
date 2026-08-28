@@ -319,7 +319,9 @@ pruefe(
 console.log('\n4) Feindliche Projekt-Art landet als Text, nicht als Markup');
 klick(knoepfe('fdrop')[0]); // Projekt-Art
 const artPanel = leiste.alleKnoten().filter((k) => k.className === 'fpanel')[0];
-const artZeile = artPanel.kinderKnoten()[0];
+// Erstes Kind ist die Beschriftung "Zahlen = Projekte im Board".
+pruefe('Panel-Kopf beschriftet die Zahlen als Board-Zahlen', artPanel.kinderKnoten()[0].className === 'fkopf' && artPanel.kinderKnoten()[0].textContent === 'Zahlen = Projekte im Board');
+const artZeile = artPanel.kinderKnoten()[1];
 pruefe('Art-Name unverändert als Text im Panel', artZeile.textContent.indexOf(BOESE) !== -1, artZeile.textContent);
 pruefe(
   'der Art-Name ist ein Textknoten, kein Element',
