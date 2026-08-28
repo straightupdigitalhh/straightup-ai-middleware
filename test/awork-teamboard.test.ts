@@ -224,6 +224,7 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         faelligAm: null,
         istPrio: false,
         istWiederkehrend: false,
+        arbeitsart: null,
         assigneeIds: ['u-lea'],
       },
       {
@@ -237,6 +238,7 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         faelligAm: '2026-08-27T00:00:00Z',
         istPrio: true,
         istWiederkehrend: false,
+        arbeitsart: null,
         assigneeIds: ['u-lea', 'u-jan'],
       },
       {
@@ -250,6 +252,7 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         faelligAm: null,
         istPrio: false,
         istWiederkehrend: false,
+        arbeitsart: null,
         assigneeIds: [],
       },
     ]);
@@ -280,17 +283,21 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
         faelligAm: null,
         istPrio: false,
         istWiederkehrend: false,
+        arbeitsart: null,
         assigneeIds: [],
       },
     ]);
   });
 
-  it('setzt istWiederkehrend und assigneeIds aus der Rohantwort von /me/allavailabletasks (Produktionskette der einzigen Stelle, die OffeneAufgabe erzeugt)', async () => {
+  it('setzt istWiederkehrend, arbeitsart und assigneeIds aus der Rohantwort von /me/allavailabletasks (Produktionskette der einzigen Stelle, die OffeneAufgabe erzeugt)', async () => {
     fakeFetch(200, [
       {
         id: 't-5',
         name: 'Wiederkehrende Wartung',
         isRecurring: true,
+        // Arbeitsart der Aufgabe — Werte im echten Workspace: Interne
+        // Arbeit, Vertriebstätigkeit, Projektarbeit.
+        typeOfWork: { id: 'tow-1', name: 'Projektarbeit' },
         taskStatus: { name: 'Offen', type: 'todo' },
         assignees: [{ id: 'u-lea' }, { id: 'u-jan' }],
       },
@@ -298,7 +305,18 @@ describe('AworkClient – Teamboard-Lesemethoden', () => {
     const client = new AworkClient('T', BASE_URL);
     const result = await client.getAvailableTasks();
     expect(result[0].istWiederkehrend).toBe(true);
+    expect(result[0].arbeitsart).toBe('Projektarbeit');
     expect(result[0].assigneeIds).toEqual(['u-lea', 'u-jan']);
+  });
+
+  it('lässt arbeitsart null, wenn die Aufgabe kein typeOfWork trägt (nicht jede Aufgabe hat eine Arbeitsart)', async () => {
+    fakeFetch(200, [
+      { id: 't-6', name: 'Ohne Arbeitsart', taskStatus: { name: 'Offen', type: 'todo' }, assignees: [] },
+      { id: 't-7', name: 'Leeres typeOfWork', typeOfWork: null, taskStatus: { name: 'Offen', type: 'todo' }, assignees: [] },
+    ]);
+    const client = new AworkClient('T', BASE_URL);
+    const result = await client.getAvailableTasks();
+    expect(result.map((a) => a.arbeitsart)).toEqual([null, null]);
   });
 
   // ─── getProjectsLeicht ───────────────────────────────────────

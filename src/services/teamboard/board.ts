@@ -43,6 +43,7 @@ export interface AufgabenKarte {
   faelligAm: string | null;
   istPrio: boolean;
   istWiederkehrend: boolean;
+  arbeitsart: string | null;
   assigneeIds: string[];
   ueberfaellig: boolean;
 }
@@ -83,6 +84,7 @@ export function baueBoard(eingabe: {
           faelligAm: a.faelligAm,
           istPrio: a.istPrio,
           istWiederkehrend: a.istWiederkehrend,
+          arbeitsart: a.arbeitsart,
           assigneeIds: a.assigneeIds,
           // Datums-Vergleich auf Tagesbasis: dueOn ist ein UTC-Mitternachts-
           // Stempel, "heute" kommt als Berlin-Kalendertag herein.

@@ -102,6 +102,8 @@ export interface OffeneAufgabe {
   faelligAm: string | null; // dueOn, ISO
   istPrio: boolean;
   istWiederkehrend: boolean;
+  /** typeOfWork.name, z. B. "Projektarbeit" — nicht jede Aufgabe hat eine Arbeitsart. */
+  arbeitsart: string | null;
   assigneeIds: string[];
 }
 
@@ -136,6 +138,7 @@ interface AworkAvailableTaskRaw {
   dueOn?: string | null;
   isPrio?: boolean;
   isRecurring?: boolean;
+  typeOfWork?: { name?: string | null } | null;
   assignees?: { id: string }[];
 }
 
@@ -431,6 +434,7 @@ export class AworkClient {
       faelligAm: t.dueOn ?? null,
       istPrio: t.isPrio === true,
       istWiederkehrend: t.isRecurring === true,
+      arbeitsart: t.typeOfWork?.name ?? null,
       assigneeIds: (t.assignees ?? []).map((a) => a.id),
     }));
   }

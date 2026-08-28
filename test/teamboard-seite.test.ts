@@ -821,6 +821,7 @@ function aufgabeKarte(teile: Partial<Lane["aufgaben"][number]>): Lane["aufgaben"
     faelligAm: null,
     istPrio: false,
     istWiederkehrend: false,
+    arbeitsart: null,
     assigneeIds: [],
     ueberfaellig: false,
     ...teile,

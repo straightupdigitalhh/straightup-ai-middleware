@@ -90,6 +90,7 @@ function karte(id: string, assigneeIds: string[], over?: Partial<AufgabenKarte>)
     faelligAm: null,
     istPrio: false,
     istWiederkehrend: false,
+    arbeitsart: null,
     assigneeIds,
     ueberfaellig: false,
     ...over,
