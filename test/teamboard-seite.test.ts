@@ -395,6 +395,17 @@ describe("renderSeite", () => {
     expect(timerPos).toBeLessThan(listePos);
   });
 
+  it("hängt den Karten-Wrapper nur an, wenn er Karten bekommt — leer erzeugte er über den Flex-gap 14px toten Abstand am Spaltenfuß (Fix-Runde)", () => {
+    const html = renderSeite(stand(), null);
+    const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];
+    expect(zeichneBlock).toContain("if (lane.aufgaben.length > 0) box.appendChild(liste);");
+    // Der Wrapper selbst bleibt: an ihm hängt das Aufklappen von
+    // "+n weitere" und das gepinnte liste.appendChild(k).
+    expect(zeichneBlock).toContain('var liste = el("div", "karten");');
+    expect(zeichneBlock).toContain("liste.appendChild(k)");
+    expect(zeichneBlock).toContain('liste.querySelectorAll("[hidden]")');
+  });
+
   it("setzt die Status-Badge ÜBER den Aufgabentitel, nie daneben — der Titel bekommt die volle Breite (Facelift)", () => {
     const html = renderSeite(stand(), null);
     const zeichneBlock = html.split("function zeichne()")[1]?.split("function aktualisiereKopf")[0];

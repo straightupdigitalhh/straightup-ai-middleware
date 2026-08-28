@@ -757,7 +757,10 @@ ${LOGO_SVG}
       }
       var aufgeklappt = aufgeklappteLanes.has(lane.userId);
       var liste = el("div", "karten");
-      box.appendChild(liste);
+      // Nur anhängen, wenn er auch Karten bekommt: die Lane ist ein
+      // Flex-Container mit gap: 14px, ein leerer Wrapper wäre trotzdem ein
+      // Flex-Kind und erzeugte 14px toten Abstand am Spaltenfuß.
+      if (lane.aufgaben.length > 0) box.appendChild(liste);
       lane.aufgaben.forEach(function (a, i) {
         var k = el("article", "karte");
         if (i >= MAX_KARTEN && !aufgeklappt) k.hidden = true;
