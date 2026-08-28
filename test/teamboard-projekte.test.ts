@@ -205,6 +205,18 @@ describe("projekteFuerBoard — nur die im Board vorkommenden Projekte", () => {
     expect(projekteFuerBoard(board, ALLE)).toEqual({});
   });
 
+  it("nimmt nur eigene Einträge der Stammdaten — eine Projekt-ID wie 'constructor' erbt keinen Treffer", () => {
+    // Ohne eigene-Eigenschaft-Prüfung liefert alle["constructor"] den
+    // Prototyp-Wert und schriebe ihn als Projekt-Angabe in die Antwort.
+    // Der Geschwistercode (projektPasst, projektArtenAusBoard) prüft
+    // bereits so — hier war es die einzige Lücke.
+    const board: Board = {
+      stand: "2026-08-28T10:00:00.000Z",
+      lanes: [lane({ aufgaben: [aufgabe("constructor")], timer: timer("toString") })],
+    };
+    expect(projekteFuerBoard(board, ALLE)).toEqual({});
+  });
+
   it("liefert bei leeren Stammdaten (awork-Ausfall vor dem ersten Stand) ein leeres Objekt", () => {
     const board: Board = {
       stand: "2026-08-28T10:00:00.000Z",

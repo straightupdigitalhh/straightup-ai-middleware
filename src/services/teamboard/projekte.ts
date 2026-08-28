@@ -133,16 +133,28 @@ export function erstelleProjekteLader(opts: {
  * "steht nicht drin" und "hat keine Art" sind im Client dasselbe
  * (Optional-Zugriff ⇒ keine Art, kein Status), ein leerer Eintrag wäre nur
  * Ballast.
+ *
+ * Nachgeschlagen wird über eine eigene-Eigenschaft-Prüfung wie im
+ * Geschwistercode (projektPasst, projektArtenAusBoard): Projekt-IDs sind
+ * Fremddaten, und ein direkter Zugriff lieferte bei einer ID wie
+ * "constructor" den Prototyp-Wert als vermeintliche Projekt-Angabe.
  */
+function stammdatenZu(alle: ProjekteProId, projektId: string | null): ProjektInfo | null {
+  if (projektId === null) return null;
+  return Object.prototype.hasOwnProperty.call(alle, projektId) ? alle[projektId] : null;
+}
+
 export function projekteFuerBoard(board: Board, alle: ProjekteProId): ProjekteProId {
   const ergebnis: ProjekteProId = {};
   for (const lane of board.lanes) {
-    if (lane.timer && lane.timer.projektId && alle[lane.timer.projektId]) {
-      ergebnis[lane.timer.projektId] = alle[lane.timer.projektId];
+    const timerInfo = lane.timer ? stammdatenZu(alle, lane.timer.projektId) : null;
+    if (lane.timer && lane.timer.projektId && timerInfo) {
+      ergebnis[lane.timer.projektId] = timerInfo;
     }
     for (const aufgabe of lane.aufgaben) {
-      if (aufgabe.projektId && alle[aufgabe.projektId]) {
-        ergebnis[aufgabe.projektId] = alle[aufgabe.projektId];
+      const info = stammdatenZu(alle, aufgabe.projektId);
+      if (aufgabe.projektId && info) {
+        ergebnis[aufgabe.projektId] = info;
       }
     }
   }
