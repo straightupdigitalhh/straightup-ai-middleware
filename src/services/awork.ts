@@ -105,6 +105,27 @@ export interface OffeneAufgabe {
   assigneeIds: string[];
 }
 
+/**
+ * Projekt-Stammdaten fürs Teamboard-Filter — bewusst nur die zwei Felder,
+ * die die Filterleiste braucht (Projekt-Art und Projekt-Status-Typ). Der
+ * volle AworkProject-Datensatz wäre für einen Filter über ~100 Projekte
+ * unnötiger Ballast in Antwort und Cache.
+ */
+export interface AworkProjektLeicht {
+  id: string;
+  /** projectType.name, z. B. "Website-Support" — nicht jedes Projekt hat eine Art. */
+  artName: string | null;
+  /** projectStatus.type: progress | closed | not-started (roh durchgereicht wie statusTyp bei OffeneAufgabe). */
+  statusTyp: string | null;
+}
+
+/** Rohform von GET /projects (nur intern für getProjectsLeicht). */
+interface AworkProjectRaw {
+  id: string;
+  projectType?: { name?: string | null } | null;
+  projectStatus?: { type?: string | null } | null;
+}
+
 /** Rohform von GET /me/allavailabletasks (nur intern für getAvailableTasks). */
 interface AworkAvailableTaskRaw {
   id: string;
@@ -411,6 +432,23 @@ export class AworkClient {
       istPrio: t.isPrio === true,
       istWiederkehrend: t.isRecurring === true,
       assigneeIds: (t.assignees ?? []).map((a) => a.id),
+    }));
+  }
+
+  /**
+   * Projekt-Stammdaten (Art + Status-Typ) aller sichtbaren Projekte, rein
+   * lesend. Eigene Methode statt getProjects(): die holt pageSize=200 ohne
+   * Paginierung (im Workspace stehen ~100 Projekte, das reicht dort) und
+   * liefert den vollen Datensatz — hier zählen alle Projekte und nur zwei
+   * Felder. Über fetchAllPages, damit die Antwort auch jenseits von 1000
+   * Projekten vollständig bleibt.
+   */
+  async getProjectsLeicht(): Promise<AworkProjektLeicht[]> {
+    const data = await this.fetchAllPages<AworkProjectRaw>('/projects');
+    return data.map((p) => ({
+      id: p.id,
+      artName: p.projectType?.name ?? null,
+      statusTyp: p.projectStatus?.type ?? null,
     }));
   }
 
