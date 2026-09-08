@@ -152,6 +152,7 @@ export function buildTicketDescriptionHtml(p: TicketPayload): string {
   const desc = escapeHtml(p.description).replace(/\n/g, '<br>');
   const { viewport, screen, devicePixelRatio, userAgent, timestamp } = p.environment;
   const pageLabel = escapeHtml(p.page.title || p.page.url);
+  const selector = p.element?.selector ?? '';
 
   return [
     `<p>${desc}</p>`,
@@ -160,7 +161,7 @@ export function buildTicketDescriptionHtml(p: TicketPayload): string {
     '<ul>',
     `<li><strong>Gemeldet von:</strong> ${escapeHtml(p.reporterName)}</li>`,
     `<li><strong>Seite:</strong> <a href="${escapeHtml(p.page.url)}" target="_blank">${pageLabel}</a></li>`,
-    `<li><strong>Element:</strong> <code>${escapeHtml(p.element.selector)}</code></li>`,
+    `<li><strong>Element:</strong> <code>${escapeHtml(selector)}</code></li>`,
     `<li><strong>Viewport:</strong> ${viewport.width}×${viewport.height} (DPR ${devicePixelRatio}) · Bildschirm: ${screen.width}×${screen.height}</li>`,
     `<li><strong>Browser:</strong> ${escapeHtml(userAgent)}</li>`,
     `<li><strong>Zeitpunkt:</strong> ${escapeHtml(timestamp)}</li>`,
