@@ -108,10 +108,14 @@ export function createFeedbackRouter({
     }
     const ticket = validation.value;
 
-    const hostname = new URL(ticket.page.url).hostname;
-    if (!domainAllowed(hostname, record.domains)) {
-      res.status(403).json({ error: 'domain_not_allowed', message: `Key gilt nicht für ${hostname}` });
-      return;
+    // Domain-Prüfung nur, wenn eine URL vorliegt (lokale PDF-Dateien haben keine).
+    const checkedUrl = ticket.pdf ? ticket.pdf.url : ticket.page.url;
+    if (checkedUrl) {
+      const hostname = new URL(checkedUrl).hostname;
+      if (!domainAllowed(hostname, record.domains)) {
+        res.status(403).json({ error: 'domain_not_allowed', message: `Key gilt nicht für ${hostname}` });
+        return;
+      }
     }
 
     // Assignee bestimmen: intern = Formularwahl (muss Mitglied sein), Kunde = Default
@@ -143,7 +147,7 @@ export function createFeedbackRouter({
     let taskId: string;
     try {
       const task = await awork.createTask(
-        taskNameFrom(ticket.description),
+        taskNameFrom(ticket.description, ticket.pdf),
         record.projectId,
         record.taskListId,
         buildTicketDescriptionHtml(ticket),
@@ -180,7 +184,7 @@ export function createFeedbackRouter({
     }
 
     const taskUrl = workspaceUrl ? `${workspaceUrl}/tasks/${taskId}` : '';
-    console.log(`✅ Feedback-Ticket angelegt: "${taskNameFrom(ticket.description)}" → ${record.label} (Screenshot: ${screenshotAttached})`);
+    console.log(`✅ Feedback-Ticket angelegt: "${taskNameFrom(ticket.description, ticket.pdf)}" → ${record.label} (Screenshot: ${screenshotAttached})`);
     res.status(201).json({ taskId, taskUrl, screenshotAttached });
   });
 

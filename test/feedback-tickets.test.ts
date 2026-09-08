@@ -25,6 +25,21 @@ function payload(overrides: Record<string, any> = {}) {
   };
 }
 
+function pdfPayload(overrides: Record<string, any> = {}) {
+  const { element, ...base } = payload();
+  return {
+    ...base,
+    description: 'Logo zu klein\nBitte 20 % größer',
+    page: { url: '', title: 'flyer-v3.pdf' },
+    pdf: {
+      fileName: 'flyer-v3.pdf', url: null, page: 3, pageCount: 12,
+      pageSize: { width: 595.28, height: 841.89 },
+      rect: { x: 119.06, y: 340.16, width: 240.94, height: 48.19 },
+    },
+    ...overrides,
+  };
+}
+
 function makeStub() {
   return {
     getProject: vi.fn().mockResolvedValue({ id: 'proj-1', name: 'P' }),
@@ -174,5 +189,53 @@ describe('POST /feedback/tickets', () => {
     const res = await request(app).post('/feedback/tickets')
       .set('X-Feedback-Key', record.key).send(payload());
     expect(res.status).toBe(429);
+  });
+});
+
+describe('POST /feedback/tickets – PDF', () => {
+  it('lokale Datei: 201 ohne Domain-Prüfung, Titel mit Seite und Datei, Beschreibung mit Fundstelle', async () => {
+    const { app, record, stub } = makeApp(makeStub());
+    const res = await request(app).post('/feedback/tickets')
+      .set('X-Feedback-Key', record.key).send(pdfPayload());
+    expect(res.status).toBe(201);
+    expect(stub.createTask).toHaveBeenCalledWith(
+      'S. 3 · flyer-v3.pdf: Logo zu klein', 'proj-1', 'list-1',
+      expect.stringContaining('3 von 12'),
+      expect.any(String),
+    );
+    expect(stub.createTask.mock.calls[0][3]).toContain('42 mm von links');
+    expect(stub.uploadTaskFile).toHaveBeenCalled();
+  });
+
+  it('gehostete PDF auf fremder Domain: 403', async () => {
+    const { app, record } = makeApp(makeStub());
+    const res = await request(app).post('/feedback/tickets')
+      .set('X-Feedback-Key', record.key)
+      .send(pdfPayload({
+        page: { url: 'https://fremd.de/x.pdf', title: 'x.pdf' },
+        pdf: { ...pdfPayload().pdf, url: 'https://fremd.de/x.pdf' },
+      }));
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('domain_not_allowed');
+  });
+
+  it('gehostete PDF auf erlaubter Subdomain: 201', async () => {
+    const { app, record } = makeApp(makeStub());
+    const res = await request(app).post('/feedback/tickets')
+      .set('X-Feedback-Key', record.key)
+      .send(pdfPayload({
+        page: { url: 'https://preview.kunde.de/flyer-v3.pdf', title: 'flyer-v3.pdf' },
+        pdf: { ...pdfPayload().pdf, url: 'https://preview.kunde.de/flyer-v3.pdf' },
+      }));
+    expect(res.status).toBe(201);
+  });
+
+  it('ungültiger pdf-Block: 400 validation', async () => {
+    const { app, record } = makeApp(makeStub());
+    const res = await request(app).post('/feedback/tickets')
+      .set('X-Feedback-Key', record.key)
+      .send(pdfPayload({ pdf: { ...pdfPayload().pdf, page: 99 } }));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('validation');
   });
 });
