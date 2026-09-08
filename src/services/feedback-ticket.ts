@@ -148,9 +148,38 @@ export function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+const ptToMm = (pt: number): number => Math.round(pt * 25.4 / 72);
+
+/** Fundstelle für Gestalter: Abstand vom linken/oberen Seitenrand, Bereich, Seitenformat – in mm. */
+export function formatPdfPosition(pdf: PdfLocation): string {
+  return `${ptToMm(pdf.rect.x)} mm von links, ${ptToMm(pdf.rect.y)} mm von oben`
+    + ` · Bereich ${ptToMm(pdf.rect.width)} × ${ptToMm(pdf.rect.height)} mm`
+    + ` · Seite ${ptToMm(pdf.pageSize.width)} × ${ptToMm(pdf.pageSize.height)} mm`;
+}
+
 export function buildTicketDescriptionHtml(p: TicketPayload): string {
   const desc = escapeHtml(p.description).replace(/\n/g, '<br>');
   const { viewport, screen, devicePixelRatio, userAgent, timestamp } = p.environment;
+
+  if (p.pdf) {
+    const file = p.pdf.url
+      ? `<a href="${escapeHtml(p.pdf.url)}" target="_blank">${escapeHtml(p.pdf.fileName)}</a>`
+      : escapeHtml(p.pdf.fileName);
+    return [
+      `<p>${desc}</p>`,
+      '<hr>',
+      '<p><strong>📄 PDF-Feedback</strong></p>',
+      '<ul>',
+      `<li><strong>Gemeldet von:</strong> ${escapeHtml(p.reporterName)}</li>`,
+      `<li><strong>Datei:</strong> ${file}</li>`,
+      `<li><strong>Seite:</strong> ${p.pdf.page} von ${p.pdf.pageCount}</li>`,
+      `<li><strong>Position:</strong> ${escapeHtml(formatPdfPosition(p.pdf))}</li>`,
+      `<li><strong>Zeitpunkt:</strong> ${escapeHtml(timestamp)}</li>`,
+      `<li><strong>Browser:</strong> ${escapeHtml(userAgent)}</li>`,
+      '</ul>',
+    ].join('\n');
+  }
+
   const pageLabel = escapeHtml(p.page.title || p.page.url);
   const selector = p.element?.selector ?? '';
 
@@ -169,9 +198,10 @@ export function buildTicketDescriptionHtml(p: TicketPayload): string {
   ].join('\n');
 }
 
-export function taskNameFrom(description: string): string {
+export function taskNameFrom(description: string, pdf?: PdfLocation | null): string {
   const firstLine = description.trim().split('\n')[0].trim();
-  return firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
+  const short = firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
+  return pdf ? `S. ${pdf.page} · ${pdf.fileName}: ${short}` : short;
 }
 
 // ─── Screenshot ──────────────────────────────────────────────────

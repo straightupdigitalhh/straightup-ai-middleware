@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  validateTicketPayload, buildTicketDescriptionHtml, taskNameFrom,
+  validateTicketPayload, buildTicketDescriptionHtml, taskNameFrom, formatPdfPosition,
   decodeScreenshot, checkRateLimit, resetRateLimits,
 } from '../src/services/feedback-ticket.js';
 
@@ -209,5 +209,62 @@ describe('checkRateLimit', () => {
   it('zählt pro Key getrennt', () => {
     for (let i = 0; i < 60; i++) checkRateLimit('fbk_a');
     expect(checkRateLimit('fbk_b')).toBe(true);
+  });
+});
+
+describe('formatPdfPosition', () => {
+  it('rechnet Punkte in ganze Millimeter um', () => {
+    expect(formatPdfPosition(pdfPayload.pdf)).toBe(
+      '42 mm von links, 120 mm von oben · Bereich 85 × 17 mm · Seite 210 × 297 mm',
+    );
+  });
+});
+
+describe('taskNameFrom – PDF', () => {
+  it('stellt Seite und Datei voran', () => {
+    expect(taskNameFrom('Logo zu klein\nDetails', pdfPayload.pdf)).toBe('S. 3 · flyer-v3.pdf: Logo zu klein');
+  });
+
+  it('kürzt nur den Beschreibungsteil auf 60 Zeichen', () => {
+    const name = taskNameFrom('x'.repeat(100), pdfPayload.pdf);
+    expect(name).toBe('S. 3 · flyer-v3.pdf: ' + 'x'.repeat(60) + '…');
+  });
+
+  it('ohne pdf unverändert', () => {
+    expect(taskNameFrom('Kurzer Titel', null)).toBe('Kurzer Titel');
+    expect(taskNameFrom('Kurzer Titel')).toBe('Kurzer Titel');
+  });
+});
+
+describe('buildTicketDescriptionHtml – PDF', () => {
+  it('lokale Datei: Name ohne Link, Seite, Position, kein Element-Block', () => {
+    const html = buildTicketDescriptionHtml(pdfPayload as any);
+    expect(html).toContain('📄 PDF-Feedback');
+    expect(html).toContain('<strong>Datei:</strong> flyer-v3.pdf');
+    expect(html).not.toContain('<a href');
+    expect(html).toContain('<strong>Seite:</strong> 3 von 12');
+    expect(html).toContain('42 mm von links, 120 mm von oben');
+    expect(html).not.toContain('Element:');
+    expect(html).not.toContain('Viewport:');
+    expect(html).toContain('Kunde Klaus');
+    expect(html).toContain('TestBrowser/1.0');
+    expect(html).toContain('2026-07-02');
+  });
+
+  it('gehostete Datei: Name als Link', () => {
+    const html = buildTicketDescriptionHtml({
+      ...pdfPayload,
+      pdf: { ...pdfPayload.pdf, url: 'https://preview.agentur.de/flyer-v3.pdf' },
+    } as any);
+    expect(html).toContain('<a href="https://preview.agentur.de/flyer-v3.pdf" target="_blank">flyer-v3.pdf</a>');
+  });
+
+  it('escapet den Dateinamen', () => {
+    const html = buildTicketDescriptionHtml({
+      ...pdfPayload,
+      pdf: { ...pdfPayload.pdf, fileName: '<img src=x>.pdf' },
+    } as any);
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img src=x&gt;.pdf');
   });
 });
