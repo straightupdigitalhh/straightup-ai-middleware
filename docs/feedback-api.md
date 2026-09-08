@@ -78,7 +78,7 @@ wenn `url` gesetzt), Seite und die Position in Millimetern.
 
 **Domain-Prüfung:** bei `url: null` entfällt sie; bei gehosteten PDFs muss der
 Hostname der PDF-URL zu den Domains des Keys passen. Liegen PDFs auf einem
-Preview-Server, dessen Domain also beim Key eintragen (z. B.
+Preview-Server, dann dessen Domain beim Key eintragen (z. B.
 `preview.straightup-digital.de`). Damit der BugBee-Viewer die PDF ohne
 Nachfrage laden kann, sollte der Server PDFs mit
 `Access-Control-Allow-Origin: *` ausliefern.

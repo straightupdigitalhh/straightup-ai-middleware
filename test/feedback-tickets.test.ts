@@ -230,6 +230,29 @@ describe('POST /feedback/tickets – PDF', () => {
     expect(res.status).toBe(201);
   });
 
+  it('PDF: geprüft wird pdf.url, nicht page.url (fremde PDF trotz erlaubter page.url → 403)', async () => {
+    const { app, record } = makeApp(makeStub());
+    const res = await request(app).post('/feedback/tickets')
+      .set('X-Feedback-Key', record.key)
+      .send(pdfPayload({
+        page: { url: 'https://kunde.de/viewer', title: 'x.pdf' },
+        pdf: { ...pdfPayload().pdf, url: 'https://fremd.de/x.pdf' },
+      }));
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('domain_not_allowed');
+  });
+
+  it('PDF: erlaubte pdf.url gewinnt über fremde page.url → 201', async () => {
+    const { app, record } = makeApp(makeStub());
+    const res = await request(app).post('/feedback/tickets')
+      .set('X-Feedback-Key', record.key)
+      .send(pdfPayload({
+        page: { url: 'https://fremd.de/viewer', title: 'x.pdf' },
+        pdf: { ...pdfPayload().pdf, url: 'https://preview.kunde.de/x.pdf' },
+      }));
+    expect(res.status).toBe(201);
+  });
+
   it('ungültiger pdf-Block: 400 validation', async () => {
     const { app, record } = makeApp(makeStub());
     const res = await request(app).post('/feedback/tickets')

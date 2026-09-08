@@ -107,7 +107,7 @@ export function validateTicketPayload(
     return { ok: false, message: 'page.url muss eine gültige http(s)-URL sein' };
   }
 
-  if (!isPdf || b.element !== undefined) {
+  if (!isPdf || b.element != null) {
     if (!b.element || typeof b.element.selector !== 'string' || !b.element.rect) {
       return { ok: false, message: 'element.selector / element.rect fehlen' };
     }
@@ -201,7 +201,9 @@ export function buildTicketDescriptionHtml(p: TicketPayload): string {
 export function taskNameFrom(description: string, pdf?: PdfLocation | null): string {
   const firstLine = description.trim().split('\n')[0].trim();
   const short = firstLine.length > 60 ? firstLine.slice(0, 60) + '…' : firstLine;
-  return pdf ? `S. ${pdf.page} · ${pdf.fileName}: ${short}` : short;
+  if (!pdf) return short;
+  const file = pdf.fileName.replace(/\s+/g, ' ').trim().slice(0, 80);
+  return `S. ${pdf.page} · ${file}: ${short}`;
 }
 
 // ─── Screenshot ──────────────────────────────────────────────────

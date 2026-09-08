@@ -107,6 +107,14 @@ describe('validateTicketPayload', () => {
       expect(validateTicketPayload(pdfPayload).ok).toBe(true);
     });
 
+    it('akzeptiert element: null bei PDF-Tickets', () => {
+      expect(validateTicketPayload({ ...pdfPayload, element: null }).ok).toBe(true);
+    });
+
+    it('element: null bleibt bei Website-Tickets (ohne pdf) verboten', () => {
+      expect(validateTicketPayload({ ...validPayload, element: null }).ok).toBe(false);
+    });
+
     it('akzeptiert gehostete PDF mit http(s)-URL', () => {
       const r = validateTicketPayload({
         ...pdfPayload,
@@ -233,6 +241,14 @@ describe('taskNameFrom – PDF', () => {
   it('ohne pdf unverändert', () => {
     expect(taskNameFrom('Kurzer Titel', null)).toBe('Kurzer Titel');
     expect(taskNameFrom('Kurzer Titel')).toBe('Kurzer Titel');
+  });
+
+  it('bereinigt Zeilenumbrüche im Dateinamen und kürzt auf 80 Zeichen', () => {
+    const title = taskNameFrom('x', { ...pdfPayload.pdf, fileName: 'a\nb' + 'c'.repeat(100) + '.pdf' });
+    expect(title.startsWith('S. 3 · a b')).toBe(true);
+    expect(title).not.toContain('\n');
+    const file = title.slice('S. 3 · '.length, title.length - ': x'.length);
+    expect(file.length).toBe(80);
   });
 });
 
