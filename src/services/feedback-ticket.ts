@@ -1,11 +1,26 @@
 // ─── Types ───────────────────────────────────────────────────────
 
+export interface PdfLocation {
+  /** z. B. "flyer-v3.pdf" */
+  fileName: string;
+  /** http(s)-URL der PDF, null bei lokaler Datei */
+  url: string | null;
+  /** 1-basiert */
+  page: number;
+  pageCount: number;
+  /** Punkte (1/72 Zoll), dargestellte Ausrichtung */
+  pageSize: { width: number; height: number };
+  /** Punkte, Ursprung oben links der Seite */
+  rect: { x: number; y: number; width: number; height: number };
+}
+
 export interface TicketPayload {
   description: string;
   reporterName: string;
   assigneeId?: string | null;
   page: { url: string; title: string };
-  element: {
+  /** Pflicht bei Website-Tickets, entfällt bei PDF-Tickets */
+  element?: {
     selector: string;
     rect: { x: number; y: number; width: number; height: number };
   };
@@ -17,12 +32,52 @@ export interface TicketPayload {
     timestamp: string;
   };
   screenshot?: string | null;
+  /** Vorhanden bei PDF-Tickets (Spec 2026-09-08) */
+  pdf?: PdfLocation;
 }
 
 // ─── Validierung ─────────────────────────────────────────────────
 
 const SCREENSHOT_PREFIX = 'data:image/png;base64,';
 const MAX_SCREENSHOT_BYTES = 12 * 1024 * 1024;
+
+const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+function isRect(r: any): boolean {
+  return !!r && typeof r === 'object'
+    && isFiniteNumber(r.x) && isFiniteNumber(r.y)
+    && isFiniteNumber(r.width) && isFiniteNumber(r.height);
+}
+
+function isHttpUrl(s: unknown): boolean {
+  if (typeof s !== 'string') return false;
+  try {
+    const u = new URL(s);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/** Gibt eine Fehlermeldung zurück oder null, wenn der pdf-Block gültig ist. */
+function validatePdfBlock(pdf: any): string | null {
+  if (!pdf || typeof pdf !== 'object') return 'pdf muss ein Objekt sein';
+  if (typeof pdf.fileName !== 'string' || !pdf.fileName.trim() || pdf.fileName.length > 255) {
+    return 'pdf.fileName fehlt, ist leer oder länger als 255 Zeichen';
+  }
+  if (pdf.url !== null && !isHttpUrl(pdf.url)) return 'pdf.url muss null oder eine http(s)-URL sein';
+  if (!Number.isInteger(pdf.page) || !Number.isInteger(pdf.pageCount) || pdf.page < 1 || pdf.pageCount < 1 || pdf.page > pdf.pageCount) {
+    return 'pdf.page / pdf.pageCount müssen ganze Zahlen ≥ 1 mit page ≤ pageCount sein';
+  }
+  if (!pdf.pageSize || !isFiniteNumber(pdf.pageSize.width) || !isFiniteNumber(pdf.pageSize.height)
+      || pdf.pageSize.width <= 0 || pdf.pageSize.height <= 0) {
+    return 'pdf.pageSize muss Breite/Höhe > 0 enthalten';
+  }
+  if (!isRect(pdf.rect) || pdf.rect.width < 0 || pdf.rect.height < 0) {
+    return 'pdf.rect muss x/y/width/height als Zahlen enthalten (Breite/Höhe ≥ 0)';
+  }
+  return null;
+}
 
 export function validateTicketPayload(
   body: unknown,
@@ -39,30 +94,28 @@ export function validateTicketPayload(
   if (!b.page || typeof b.page.url !== 'string' || typeof b.page.title !== 'string') {
     return { ok: false, message: 'page.url / page.title fehlen' };
   }
-  try {
-    const u = new URL(b.page.url);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-      return { ok: false, message: 'page.url muss http(s) sein' };
+
+  const isPdf = b.pdf !== undefined && b.pdf !== null;
+  if (isPdf) {
+    const pdfError = validatePdfBlock(b.pdf);
+    if (pdfError) return { ok: false, message: pdfError };
+    // PDF-Tickets: URL darf leer sein (lokale Datei), sonst http(s)
+    if (b.page.url !== '' && !isHttpUrl(b.page.url)) {
+      return { ok: false, message: 'page.url muss bei PDF-Tickets leer oder http(s) sein' };
     }
-  } catch {
-    return { ok: false, message: 'page.url ist keine gültige URL' };
+  } else if (!isHttpUrl(b.page.url)) {
+    return { ok: false, message: 'page.url muss eine gültige http(s)-URL sein' };
   }
-  if (!b.element || typeof b.element.selector !== 'string' || !b.element.rect) {
-    return { ok: false, message: 'element.selector / element.rect fehlen' };
+
+  if (!isPdf || b.element !== undefined) {
+    if (!b.element || typeof b.element.selector !== 'string' || !b.element.rect) {
+      return { ok: false, message: 'element.selector / element.rect fehlen' };
+    }
+    if (!isRect(b.element.rect)) {
+      return { ok: false, message: 'element.rect muss x/y/width/height als Zahlen enthalten' };
+    }
   }
-  if (
-    typeof b.element.rect !== 'object' ||
-    typeof b.element.rect.x !== 'number' ||
-    typeof b.element.rect.y !== 'number' ||
-    typeof b.element.rect.width !== 'number' ||
-    typeof b.element.rect.height !== 'number' ||
-    !Number.isFinite(b.element.rect.x) ||
-    !Number.isFinite(b.element.rect.y) ||
-    !Number.isFinite(b.element.rect.width) ||
-    !Number.isFinite(b.element.rect.height)
-  ) {
-    return { ok: false, message: 'element.rect muss x/y/width/height als Zahlen enthalten' };
-  }
+
   if (b.assigneeId !== undefined && b.assigneeId !== null && typeof b.assigneeId !== 'string') {
     return { ok: false, message: 'assigneeId muss ein String oder null sein' };
   }
@@ -71,16 +124,9 @@ export function validateTicketPayload(
     return { ok: false, message: 'environment unvollständig' };
   }
   if (
-    typeof env.viewport.width !== 'number' ||
-    typeof env.viewport.height !== 'number' ||
-    typeof env.screen.width !== 'number' ||
-    typeof env.screen.height !== 'number' ||
-    typeof env.devicePixelRatio !== 'number' ||
-    !Number.isFinite(env.viewport.width) ||
-    !Number.isFinite(env.viewport.height) ||
-    !Number.isFinite(env.screen.width) ||
-    !Number.isFinite(env.screen.height) ||
-    !Number.isFinite(env.devicePixelRatio)
+    !isFiniteNumber(env.viewport.width) || !isFiniteNumber(env.viewport.height) ||
+    !isFiniteNumber(env.screen.width) || !isFiniteNumber(env.screen.height) ||
+    !isFiniteNumber(env.devicePixelRatio)
   ) {
     return { ok: false, message: 'environment enthält ungültige Zahlenwerte' };
   }

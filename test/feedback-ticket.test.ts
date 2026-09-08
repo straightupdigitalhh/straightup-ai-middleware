@@ -20,6 +20,23 @@ const validPayload = {
   screenshot: null,
 };
 
+const pdfPayload = {
+  description: 'Logo zu klein',
+  reporterName: 'Kunde Klaus',
+  assigneeId: null,
+  page: { url: '', title: 'flyer-v3.pdf' },
+  environment: validPayload.environment,
+  screenshot: null,
+  pdf: {
+    fileName: 'flyer-v3.pdf',
+    url: null,
+    page: 3,
+    pageCount: 12,
+    pageSize: { width: 595.28, height: 841.89 },
+    rect: { x: 119.06, y: 340.16, width: 240.94, height: 48.19 },
+  },
+};
+
 describe('validateTicketPayload', () => {
   it('akzeptiert gültige Payload', () => {
     const r = validateTicketPayload(validPayload);
@@ -83,6 +100,53 @@ describe('validateTicketPayload', () => {
       environment: { ...validPayload.environment, devicePixelRatio: '2; DROP' },
     });
     expect(r.ok).toBe(false);
+  });
+
+  describe('validateTicketPayload – PDF-Tickets', () => {
+    it('akzeptiert lokale PDF ohne element und mit leerer page.url', () => {
+      expect(validateTicketPayload(pdfPayload).ok).toBe(true);
+    });
+
+    it('akzeptiert gehostete PDF mit http(s)-URL', () => {
+      const r = validateTicketPayload({
+        ...pdfPayload,
+        page: { url: 'https://preview.agentur.de/flyer-v3.pdf', title: 'flyer-v3.pdf' },
+        pdf: { ...pdfPayload.pdf, url: 'https://preview.agentur.de/flyer-v3.pdf' },
+      });
+      expect(r.ok).toBe(true);
+    });
+
+    it('ohne pdf bleibt leere page.url verboten', () => {
+      expect(validateTicketPayload({ ...validPayload, page: { url: '', title: 'x' } }).ok).toBe(false);
+    });
+
+    it('ohne pdf bleibt element Pflicht', () => {
+      const { element, ...ohneElement } = validPayload;
+      expect(validateTicketPayload(ohneElement).ok).toBe(false);
+    });
+
+    it.each([
+      ['fileName leer', { fileName: '   ' }],
+      ['fileName zu lang', { fileName: 'x'.repeat(256) }],
+      ['url kein http(s)', { url: 'ftp://a.de/x.pdf' }],
+      ['url falscher Typ', { url: 42 }],
+      ['page 0', { page: 0 }],
+      ['page > pageCount', { page: 13 }],
+      ['page keine ganze Zahl', { page: 2.5 }],
+      ['pageCount 0', { pageCount: 0 }],
+      ['pageSize Breite 0', { pageSize: { width: 0, height: 841.89 } }],
+      ['pageSize fehlt', { pageSize: undefined }],
+      ['rect negative Breite', { rect: { x: 1, y: 1, width: -5, height: 1 } }],
+      ['rect mit String', { rect: { x: '<b>', y: 1, width: 1, height: 1 } }],
+    ])('lehnt ab: %s', (_name, patch) => {
+      const r = validateTicketPayload({ ...pdfPayload, pdf: { ...pdfPayload.pdf, ...patch } });
+      expect(r.ok).toBe(false);
+    });
+
+    it('page.url muss bei pdf leer oder http(s) sein', () => {
+      const r = validateTicketPayload({ ...pdfPayload, page: { url: 'file:///x.pdf', title: 'x' } });
+      expect(r.ok).toBe(false);
+    });
   });
 });
 
