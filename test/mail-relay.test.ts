@@ -29,7 +29,8 @@ describe('POST /api/mail/send', () => {
     expect(res.status).toBe(202);
   });
 
-  it('401 ohne oder mit falschem Schlüssel, ohne zu versenden', async () => {
+  it('401 ohne oder mit falschem Schlüssel, ohne zu versenden, aber mit IP im Log', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { app, senden } = makeApp();
     const ohneSchluessel = await request(app).post('/api/mail/send').send(gueltig);
     expect(ohneSchluessel.status).toBe(401);
@@ -38,6 +39,8 @@ describe('POST /api/mail/send', () => {
     expect(falscherSchluessel.status).toBe(401);
     expect(falscherSchluessel.body.error).toBe('invalid_key');
     expect(senden).not.toHaveBeenCalled();
+    expect(warnSpy.mock.calls.some(([zeile]) => String(zeile).includes('ungültiger Dienstschlüssel'))).toBe(true);
+    warnSpy.mockRestore();
   });
 
   it('400 bei ungültigem Body', async () => {
@@ -55,18 +58,36 @@ describe('POST /api/mail/send', () => {
     }
   });
 
-  it('502 wenn Graph scheitert', async () => {
-    const { app } = makeApp(vi.fn().mockRejectedValue(new Error('Graph sendMail 500')));
+  it('502 wenn Graph scheitert, ohne die Empfängeradresse im Log', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { app } = makeApp(vi.fn().mockRejectedValue(new Error('Graph sendMail 400: ErrorInvalidRecipients peter@texter.de')));
     const res = await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(gueltig);
     expect(res.status).toBe(502);
     expect(res.body.error).toBe('versand_fehlgeschlagen');
+    const geloggt = warnSpy.mock.calls.map(args => args.join(' ')).join('\n');
+    expect(geloggt).not.toContain('peter@texter.de');
+    warnSpy.mockRestore();
   });
 
-  it('429 ab dem Limit', async () => {
+  it('429 ab dem Limit, mit Retry-After-Header', async () => {
     const { app } = makeApp(undefined, new FixedWindowLimiter(2, 60_000));
     for (let i = 0; i < 2; i++) expect((await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(gueltig)).status).toBe(202);
     const res = await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(gueltig);
     expect(res.status).toBe(429);
     expect(res.body.error).toBe('rate_limited');
+    expect(Number(res.headers['retry-after'])).toBeGreaterThanOrEqual(1);
+  });
+
+  it('502 verbraucht kein Kontingent (nur zugestellte Mails zählen gegen die Drossel)', async () => {
+    const senden = vi.fn()
+      .mockRejectedValueOnce(new Error('Graph sendMail 500: kaputt'))
+      .mockResolvedValueOnce(undefined);
+    const { app } = makeApp(senden, new FixedWindowLimiter(1, 60_000));
+    const fehlschlag = await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(gueltig);
+    expect(fehlschlag.status).toBe(502);
+    const erfolg = await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(gueltig);
+    expect(erfolg.status).toBe(202);
+    const gedrosselt = await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(gueltig);
+    expect(gedrosselt.status).toBe(429);
   });
 });

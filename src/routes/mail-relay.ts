@@ -31,6 +31,7 @@ export function createMailRelayRouter({ key, senden, limiter = new FixedWindowLi
   router.post('/api/mail/send', async (req: Request, res: Response) => {
     const gegeben = req.headers['x-service-key'];
     if (typeof gegeben !== 'string' || !safeEqual(gegeben, key)) {
+      console.warn(`📮 Relay: ungültiger Dienstschlüssel von ${req.ip}`);
       res.status(401).json({ error: 'invalid_key', message: 'Dienstschlüssel fehlt oder ist falsch' });
       return;
     }
@@ -39,16 +40,19 @@ export function createMailRelayRouter({ key, senden, limiter = new FixedWindowLi
       res.status(400).json({ error: 'validation', message: geprueft });
       return;
     }
-    if (!limiter.hit('relay')) {
+    if (limiter.istErschoepft('relay')) {
+      res.set('Retry-After', String(limiter.sekundenBisReset('relay')));
       res.status(429).json({ error: 'rate_limited', message: 'Zu viele Mails in dieser Stunde' });
       return;
     }
     try {
       await senden(geprueft.to, geprueft.subject, geprueft.text);
+      limiter.hit('relay');
       console.log(`📮 Relay-Mail: ${geprueft.to.length} Empfänger, Betreff ${geprueft.subject.length} Zeichen`);
       res.status(202).json({ ok: true });
     } catch (e) {
-      console.warn(`📮 Relay-Mail fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);
+      const grund = e instanceof Error ? e.message.replace(/:[\s\S]*$/, '') : 'unbekannt';
+      console.warn(`📮 Relay-Mail fehlgeschlagen: ${grund}`);
       res.status(502).json({ error: 'versand_fehlgeschlagen', message: 'Mail konnte nicht verschickt werden' });
     }
   });

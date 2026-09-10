@@ -206,7 +206,8 @@ app.use(createAuthRouter({ users, sessions }));
 // ─── Mail-Relay für straightup Review (gleicher Stack) ────────────
 // Eigener Dienstschlüssel, deshalb VOR der /api-Auth. Ohne Schlüssel oder
 // ohne Graph-Konfiguration bleibt der Endpunkt aus.
-const { MAIL_RELAY_KEY, MAIL_RELAY_SENDER = 'review@straightup-digital.de' } = process.env;
+const MAIL_RELAY_KEY = process.env.MAIL_RELAY_KEY;
+const MAIL_RELAY_SENDER = process.env.MAIL_RELAY_SENDER || 'review@straightup-digital.de';
 if (MAIL_RELAY_KEY && graphClients.length > 0) {
   const relayMailer = graphClients[0].forMailbox(MAIL_RELAY_SENDER);
   app.use(createMailRelayRouter({

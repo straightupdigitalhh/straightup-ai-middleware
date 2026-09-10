@@ -30,6 +30,23 @@ export class FixedWindowLimiter {
     return bucket.count >= this.max;
   }
 
+  /**
+   * Prüft ohne zu zählen, ob im aktuellen Fenster bereits `max` Treffer
+   * erreicht sind (für Nutzer wie das Mail-Relay, die vor dem eigentlichen
+   * Versand wissen müssen, ob noch Kontingent da ist, ohne es zu verbrauchen).
+   */
+  istErschoepft(key: string): boolean {
+    return this.blocked(key);
+  }
+
+  /** Sekunden bis zum Ende des aktuellen Fensters für diesen Key, mindestens 1. */
+  sekundenBisReset(key: string): number {
+    const bucket = this.buckets.get(key);
+    if (!bucket) return 1;
+    const restMs = bucket.windowStart + this.windowMs - Date.now();
+    return Math.max(1, Math.ceil(restMs / 1000));
+  }
+
   reset(): void {
     this.buckets.clear();
   }
