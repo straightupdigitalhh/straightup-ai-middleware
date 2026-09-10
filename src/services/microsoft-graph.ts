@@ -136,7 +136,7 @@ export class MicrosoftGraphClient {
    * Versendet eine E-Mail über das konfigurierte Postfach.
    * Benötigt die Application Permission "Mail.Send" (+ Admin Consent).
    */
-  async sendMail(to: string[], subject: string, htmlBody: string): Promise<void> {
+  async sendMail(to: string[], subject: string, body: string, contentType: 'HTML' | 'Text' = 'HTML'): Promise<void> {
     const token = await this.getAccessToken();
     const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(this.userEmail)}/sendMail`;
 
@@ -149,7 +149,7 @@ export class MicrosoftGraphClient {
       body: JSON.stringify({
         message: {
           subject,
-          body: { contentType: 'HTML', content: htmlBody },
+          body: { contentType, content: body },
           toRecipients: to.map(address => ({ emailAddress: { address } })),
         },
         saveToSentItems: false,
