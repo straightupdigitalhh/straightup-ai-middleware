@@ -8,6 +8,8 @@ import { FeedbackKeyStore } from '../src/services/feedback-keys.js';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createMailRelayRouter } from '../src/routes/mail-relay.js';
+import { createApiAuth } from '../src/services/auth.js';
 
 // Regression: helmet lief global VOR dem /feedback-Mount und setzte
 // Cross-Origin-Resource-Policy: same-origin + strikte CSP auch auf die
@@ -76,5 +78,34 @@ describe('App-Verdrahtung: gzip-Kompression (Stufe 3, Task 9)', () => {
   it('liefert eine hinreichend große JSON-Antwort gzip-komprimiert, wenn der Client es akzeptiert', async () => {
     const res = await request(makeApp()).get('/gross').set('Accept-Encoding', 'gzip');
     expect(res.headers['content-encoding']).toBe('gzip');
+  });
+});
+
+describe('App-Verdrahtung: Mail-Relay vor der /api-Auth', () => {
+  function relayApp() {
+    const app = express();
+    app.use(express.json());
+    // Reihenfolge wie in src/index.ts: Relay zuerst, dann die /api-Auth mit Master-Key
+    app.use(createMailRelayRouter({ key: 'dienst', senden: async () => {} }));
+    app.use('/api', createApiAuth('master'));
+    app.get('/api/sonst', (_req, res) => { res.json({ ok: true }); });
+    return app;
+  }
+
+  it('Relay braucht nur den Dienstschlüssel, kein X-API-Key', async () => {
+    const res = await request(relayApp()).post('/api/mail/send').set('X-Service-Key', 'dienst')
+      .send({ to: ['a@b.de'], subject: 'x', text: 'y' });
+    expect(res.status).toBe(202);
+  });
+
+  it('andere /api-Routen bleiben hinter der Master-Key-Auth', async () => {
+    expect((await request(relayApp()).get('/api/sonst')).status).toBe(401);
+    expect((await request(relayApp()).get('/api/sonst').set('X-API-Key', 'master')).status).toBe(200);
+  });
+
+  it('Relay ohne Dienstschlüssel: 401 vom Relay, nicht 401 der API-Auth mit Brute-Force-Zählung', async () => {
+    const res = await request(relayApp()).post('/api/mail/send').send({ to: ['a@b.de'], subject: 'x', text: 'y' });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('invalid_key');
   });
 });

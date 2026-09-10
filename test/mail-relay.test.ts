@@ -22,10 +22,21 @@ describe('POST /api/mail/send', () => {
     expect(senden).toHaveBeenCalledWith(['peter@texter.de'], 'Neue Aufgabe', 'Hallo Peter');
   });
 
+  it('202 bei einer 254 Zeichen langen Adresse (Obergrenze)', async () => {
+    const { app } = makeApp();
+    const res = await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim')
+      .send({ ...gueltig, to: ['a'.repeat(249) + '@b.de'] });
+    expect(res.status).toBe(202);
+  });
+
   it('401 ohne oder mit falschem Schlüssel, ohne zu versenden', async () => {
     const { app, senden } = makeApp();
-    expect((await request(app).post('/api/mail/send').send(gueltig)).status).toBe(401);
-    expect((await request(app).post('/api/mail/send').set('X-Service-Key', 'falsch').send(gueltig)).status).toBe(401);
+    const ohneSchluessel = await request(app).post('/api/mail/send').send(gueltig);
+    expect(ohneSchluessel.status).toBe(401);
+    expect(ohneSchluessel.body.error).toBe('invalid_key');
+    const falscherSchluessel = await request(app).post('/api/mail/send').set('X-Service-Key', 'falsch').send(gueltig);
+    expect(falscherSchluessel.status).toBe(401);
+    expect(falscherSchluessel.body.error).toBe('invalid_key');
     expect(senden).not.toHaveBeenCalled();
   });
 
@@ -33,11 +44,14 @@ describe('POST /api/mail/send', () => {
     const { app } = makeApp();
     const faelle = [
       {}, { ...gueltig, to: [] }, { ...gueltig, to: ['kein-mail'] }, { ...gueltig, to: Array(11).fill('a@b.de') },
-      { ...gueltig, subject: 'x'.repeat(201) }, { ...gueltig, text: 'x'.repeat(20_001) }, { ...gueltig, text: 42 },
+      { ...gueltig, to: [42] }, { ...gueltig, to: ['a'.repeat(250) + '@b.de'] },
+      { ...gueltig, subject: 'x'.repeat(201) }, { ...gueltig, subject: '   ' },
+      { ...gueltig, text: 'x'.repeat(20_001) }, { ...gueltig, text: 42 },
     ];
     for (const body of faelle) {
       const res = await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(body);
       expect(res.status, JSON.stringify(body).slice(0, 60)).toBe(400);
+      expect(res.body.error, JSON.stringify(body).slice(0, 60)).toBe('validation');
     }
   });
 
@@ -51,6 +65,8 @@ describe('POST /api/mail/send', () => {
   it('429 ab dem Limit', async () => {
     const { app } = makeApp(undefined, new FixedWindowLimiter(2, 60_000));
     for (let i = 0; i < 2; i++) expect((await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(gueltig)).status).toBe(202);
-    expect((await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(gueltig)).status).toBe(429);
+    const res = await request(app).post('/api/mail/send').set('X-Service-Key', 'geheim').send(gueltig);
+    expect(res.status).toBe(429);
+    expect(res.body.error).toBe('rate_limited');
   });
 });

@@ -19,6 +19,8 @@ services:
       MS_MAILBOXES: ${MS_MAILBOXES:-}
       MS_USER_EMAIL: ${MS_USER_EMAIL:-}
       MS_SENDER_EMAIL: ${MS_SENDER_EMAIL:-}
+      MAIL_RELAY_KEY: ${MAIL_RELAY_KEY:-}
+      MAIL_RELAY_SENDER: ${MAIL_RELAY_SENDER:-review@straightup-digital.de}
     volumes:
       # Ownership regelt der Entrypoint selbst (chown auf uid 1000, dann su-exec)
       - ./data:/app/data

@@ -9,6 +9,7 @@ import healthRouter from './routes/health.js';
 import lookupRouter from './routes/lookup.js';
 import uiRouter from './routes/ui.js';
 import feedbackAdminUiRouter from './routes/feedback-admin-ui.js';
+import { createMailRelayRouter } from './routes/mail-relay.js';
 import { createFeedbackAdminRouter } from './routes/feedback-admin.js';
 import { createFeedbackRouter } from './routes/feedback.js';
 import { FeedbackKeyStore } from './services/feedback-keys.js';
@@ -201,6 +202,21 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 // ─── Session-Login (Hub) ─────────────────────────────────────────
 
 app.use(createAuthRouter({ users, sessions }));
+
+// ─── Mail-Relay für straightup Review (gleicher Stack) ────────────
+// Eigener Dienstschlüssel, deshalb VOR der /api-Auth. Ohne Schlüssel oder
+// ohne Graph-Konfiguration bleibt der Endpunkt aus.
+const { MAIL_RELAY_KEY, MAIL_RELAY_SENDER = 'review@straightup-digital.de' } = process.env;
+if (MAIL_RELAY_KEY && graphClients.length > 0) {
+  const relayMailer = graphClients[0].forMailbox(MAIL_RELAY_SENDER);
+  app.use(createMailRelayRouter({
+    key: MAIL_RELAY_KEY,
+    senden: (to, subject, text) => relayMailer.sendMail(to, subject, text, 'Text'),
+  }));
+  console.log(`📮 Mail-Relay aktiv, Absender ${MAIL_RELAY_SENDER}`);
+} else {
+  console.log('📮 Mail-Relay aus (MAIL_RELAY_KEY oder MS_* nicht gesetzt)');
+}
 
 // ─── Auth Middleware ─────────────────────────────────────────────
 // Alle /api/* Endpoints akzeptieren Session-Cookie ODER X-API-Key
