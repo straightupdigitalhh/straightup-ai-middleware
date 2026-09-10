@@ -154,6 +154,8 @@ export class MicrosoftGraphClient {
         },
         saveToSentItems: false,
       }),
+      // node-fetch v2: eigene timeout-Option (kein AbortSignal wie beim globalen fetch).
+      timeout: 20_000,
     });
 
     if (!res.ok) {
