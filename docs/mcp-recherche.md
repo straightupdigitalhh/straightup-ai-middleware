@@ -18,8 +18,8 @@ Im Repository-Verzeichnis ausführen:
 
 ```bash
 claude mcp add --transport http --scope local \
-  --header "User-Agent: straightup-ai-middleware/1.0" \
-  parallel-search https://search.parallel.ai/mcp
+  parallel-search https://search.parallel.ai/mcp \
+  --header "User-Agent: straightup-ai-middleware/1.0"
 claude mcp get parallel-search
 ```
 
