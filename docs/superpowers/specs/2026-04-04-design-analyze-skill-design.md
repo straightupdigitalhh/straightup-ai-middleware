@@ -147,6 +147,10 @@ Jede der 9 Pattern-Dateien enthält:
 
 ## Tools und Abhängigkeiten
 
+Für die optionale Quellenrecherche vor einer Analyse gibt es eine
+[Anleitung für Parallel Search MCP in Claude Code](../../mcp-recherche.md).
+Sie ergänzt die Vorbereitung; die folgenden Capture-Werkzeuge bleiben bestehen.
+
 ### Bereits vorhanden (keine Installation nötig)
 
 | Tool | Verwendung |
