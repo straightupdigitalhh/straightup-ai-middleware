@@ -27,12 +27,14 @@ import {
   seiteAusHash,
   siteFuerHost,
   siteText,
+  spaeteQuittungen,
   standAlterText,
   standNeuLaden,
   stufeText,
   tagText,
   urteileFuerLage,
   verlaufAnfrage,
+  verschwundeneSites,
   vertragText,
   waechterText,
   weltText,
@@ -54,6 +56,8 @@ const BEISPIEL: any = JSON.parse(
 );
 const LAGE: LageZeile[] = BEISPIEL.lage;
 const FLOTTE: any[] = BEISPIEL.flotte;
+/** Die Aufräum-Liste des Beispiels: verwaist.de mit verschwundener Installation, intern-dev.de nur intern. */
+const AUFRAEUMEN: any[] = BEISPIEL.aufraeumen;
 const zeile = (befundId: number): LageZeile => LAGE.find((z) => z.befundId === befundId)!;
 
 // ═════════════════════════════════════════════════════════════════
@@ -204,24 +208,46 @@ describe('kopfSatz', () => {
 });
 
 describe('waechterText', () => {
+  const BEENDET = Date.parse(BEISPIEL.runde.beendetIso);
+  const MINUTE = 60_000;
+
   it('letzte Runde mit ausgefallener Quelle und ihrer Ausfallserie', () => {
-    expect(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen)).toEqual({
+    expect(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen, BEENDET + 5 * MINUTE)).toEqual({
       text: 'Wächter: Runde 4 beendet 24.10.2026, 13:12, 11 Quellen in Ordnung, ausgefallen: collmex (seit 2 Runden).',
       warnung: true,
+      rot: false,
     });
   });
 
   it('alle Quellen in Ordnung; eine Quelle, die erst in dieser Runde ausfiel, ohne Serie', () => {
-    expect(waechterText({ id: 7, beendetIso: '2026-10-24T08:00:00.000Z', quellen: { ok: 12, ausgefallen: [] } }, []))
-      .toEqual({ text: 'Wächter: Runde 7 beendet 24.10.2026, 10:00, alle 12 Quellen in Ordnung.', warnung: false });
-    expect(waechterText(
-      { id: 8, beendetIso: '2026-10-24T09:00:00.000Z', quellen: { ok: 1, ausgefallen: ['dns'] } },
-      [{ quelle: 'dns', ok: false, grund: 'Zeitlimit', dauerMs: 1, ausfallserie: 1 }],
-    )).toEqual({ text: 'Wächter: Runde 8 beendet 24.10.2026, 11:00, 1 Quelle in Ordnung, ausgefallen: dns.', warnung: true });
+    const runde7 = { id: 7, beendetIso: '2026-10-24T08:00:00.000Z', quellen: { ok: 12, ausgefallen: [] } };
+    expect(waechterText(runde7, [], Date.parse(runde7.beendetIso)))
+      .toEqual({ text: 'Wächter: Runde 7 beendet 24.10.2026, 10:00, alle 12 Quellen in Ordnung.', warnung: false, rot: false });
+    const runde8 = { id: 8, beendetIso: '2026-10-24T09:00:00.000Z', quellen: { ok: 1, ausgefallen: ['dns'] } };
+    expect(waechterText(runde8, [{ quelle: 'dns', ok: false, grund: 'Zeitlimit', dauerMs: 1, ausfallserie: 1 }], Date.parse(runde8.beendetIso)))
+      .toEqual({ text: 'Wächter: Runde 8 beendet 24.10.2026, 11:00, 1 Quelle in Ordnung, ausgefallen: dns.', warnung: true, rot: false });
   });
 
-  it('solange keine Runde beendet ist', () => {
-    expect(waechterText(null, [])).toEqual({ text: 'Wächter: noch keine Runde beendet.', warnung: true });
+  it('stehende_runde_ab_120_minuten_rot: bis 119 Minuten nach dem Ende der letzten Runde wie bisher, ab 120 rot mit eigenem Satz', () => {
+    expect(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen, BEENDET + 119 * MINUTE)).toEqual({
+      text: 'Wächter: Runde 4 beendet 24.10.2026, 13:12, 11 Quellen in Ordnung, ausgefallen: collmex (seit 2 Runden).',
+      warnung: true,
+      rot: false,
+    });
+    expect(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen, BEENDET + 120 * MINUTE).rot).toBe(true);
+    expect(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen, BEENDET + 121 * MINUTE)).toEqual({
+      text: 'Wächter: seit 2 Stunden keine Runde beendet (zuletzt Runde 4 am 24.10.2026, 13:12).',
+      warnung: true,
+      rot: true,
+    });
+    expect(waechterText(BEISPIEL.runde, [], BEENDET + 3 * 60 * MINUTE).text)
+      .toBe('Wächter: seit 3 Stunden keine Runde beendet (zuletzt Runde 4 am 24.10.2026, 13:12).');
+    expect(waechterText(BEISPIEL.runde, [], BEENDET + 50 * 60 * MINUTE).text)
+      .toBe('Wächter: seit 2 Tagen keine Runde beendet (zuletzt Runde 4 am 24.10.2026, 13:12).');
+  });
+
+  it('solange keine Runde beendet ist: ein neutraler Satz ohne Warnung', () => {
+    expect(waechterText(null, [], BEENDET)).toEqual({ text: 'Wächter: noch keine Runde beendet.', warnung: false, rot: false });
   });
 });
 
@@ -363,13 +389,25 @@ describe('Urteile in der Lage', () => {
     expect(LAGE.filter((z) => urteileFuerLage(z).includes('kein-hack')).map((z) => z.typ)).toEqual(['A1']);
   });
 
-  it('aufgeraeumt_statt_erledigt_bei_i6: ein Aufräum-Eintrag bietet „aufgeräumt" statt „erledigt", einzeln wie gesammelt', () => {
-    expect(urteileFuerLage(zeile(4))).toEqual(['aufgeraeumt', 'stumm', 'stimmt']);
-    expect(urteileFuerLage(zeile(11))).toEqual(['aufgeraeumt', 'stumm', 'stimmt']);
-    expect(urteileFuerLage({ ...zeile(4), site: '_alle', mitglieder: ['weg-a.de', 'weg-b.de'] })).toEqual(['aufgeraeumt', 'stumm']);
+  it('aufgeraeumt_nur_mit_verschwundener_installation: „aufgeräumt" bei einem I6 nur, wenn die Aufräum-Liste für die Site eine verschwundene Installation führt, sonst nur „stumm bis"', () => {
+    expect(urteileFuerLage(zeile(4), AUFRAEUMEN)).toEqual(['aufgeraeumt', 'stumm', 'stimmt']);
+    expect(urteileFuerLage(zeile(11), AUFRAEUMEN)).toEqual(['stumm', 'stimmt']); // nur intern: nichts zu entfernen
+    expect(urteileFuerLage(zeile(4))).toEqual(['stumm', 'stimmt']); // ohne Aufräum-Liste nichts zum Aufräumen
+    expect(urteileFuerLage({ ...zeile(4), site: 'WWW.Verwaist.de' }, AUFRAEUMEN)).toEqual(['aufgeraeumt', 'stumm', 'stimmt']); // Hosts wie beim Kern
     // geschickt wird dasselbe wie in der Ansicht Aufräumen: erledigt auf den I6
     expect(auftragFuerLage(zeile(4), 'aufgeraeumt')).toEqual({ art: 'erledigt', site: 'verwaist.de', typ: 'I6', werte: {} });
-    expect(LAGE.filter((z) => urteileFuerLage(z).includes('aufgeraeumt')).map((z) => z.befundId)).toEqual([4, 11]);
+    expect(LAGE.filter((z) => urteileFuerLage(z, AUFRAEUMEN).includes('aufgeraeumt')).map((z) => z.befundId)).toEqual([4]);
+  });
+
+  it('sammel_i6_zaehlt_nur_verschwundene: ein Sammel-I6 bietet „aufgeräumt", wenn ein Mitglied eine verschwundene Installation hat; die Rückfrage zählt nur diese Sites', () => {
+    const sammel = { ...zeile(4), site: '_alle', mitglieder: ['verwaist.de', 'intern-dev.de', 'weg.de'] };
+    expect(verschwundeneSites(sammel, AUFRAEUMEN)).toEqual(['verwaist.de']);
+    expect(urteileFuerLage(sammel, AUFRAEUMEN)).toEqual(['aufgeraeumt', 'stumm']);
+    expect(urteileFuerLage({ ...sammel, mitglieder: ['intern-dev.de', 'weg.de'] }, AUFRAEUMEN)).toEqual(['stumm']);
+    expect(rueckfrageText('aufgeraeumt', sammel, AUFRAEUMEN))
+      .toBe('Die verschwundenen Installationen der 1 Site dieses Sammelbefunds werden aus dem Inventar entfernt. Auf den Servern wird nichts gelöscht.');
+    const zwei = [...AUFRAEUMEN, { ...AUFRAEUMEN.find((a) => a.grund === 'verschwunden'), installation: 'altwelt:p1:weg.de', site: 'weg.de' }];
+    expect(rueckfrageText('aufgeraeumt', sammel, zwei)).toContain('der 2 Sites dieses Sammelbefunds');
   });
 
   it('stimmt_auf_jeder_einzelnen_zeile: jede Zeile einer Site bekommt „stimmt", Sammel- und Quellenzeilen nur erledigt und stumm', () => {
@@ -391,7 +429,8 @@ describe('Urteile in der Lage', () => {
       .toBe('Der Befund „Startseite deutlich verändert“ bei kunde.de wird mit dem Urteil „kein Hack“ geschlossen.');
     expect(rueckfrageText('aufgeraeumt', zeile(4)))
       .toBe('Die verschwundenen Installationen von verwaist.de werden aus dem Inventar entfernt. Auf den Servern wird nichts gelöscht.');
-    expect(rueckfrageText('aufgeraeumt', { ...zeile(4), site: '_alle', mitglieder: ['weg-a.de', 'weg-b.de'] }))
+    const weg = ['weg-a.de', 'weg-b.de'].map((site) => ({ ...AUFRAEUMEN.find((a) => a.grund === 'verschwunden'), site }));
+    expect(rueckfrageText('aufgeraeumt', { ...zeile(4), site: '_alle', mitglieder: ['weg-a.de', 'weg-b.de'] }, weg))
       .toBe('Die verschwundenen Installationen der 2 Sites dieses Sammelbefunds werden aus dem Inventar entfernt. Auf den Servern wird nichts gelöscht.');
     expect(rueckfrageText('erledigt', zeile(3))).toBe('');
   });
@@ -476,6 +515,22 @@ describe('Rückmeldung zu Aufträgen', () => {
     expect(auftragNachVerlauf(fertig, eintrag({ status: 'angewandt', quittungText: 'spät' }), GESENDET + 11 * 60_000)).toBe(fertig);
   });
 
+  it('spaete_quittung_beim_nachladen: ein gelb gewordener Auftrag wird beim Nachladen einmal gegen den Verlauf geprüft und zeigt eine späte Quittung', () => {
+    const still = laufend({ status: 'still', text: 'noch nicht übernommen, der Kern meldet sich nicht', erstelltIso: '2026-10-24T12:00:00.123Z' });
+    const andere = [laufend({ id: 'b', status: 'angewandt', text: 'ok' }), laufend({ id: 'c' })];
+    expect(verlaufAnfrage([still, ...andere], 'still')).toBe('/api/sicherheit/auftraege?seit=2026-10-24T12%3A00%3A00.123Z');
+    expect(verlaufAnfrage(andere, 'still')).toBeNull();
+    expect(verlaufAnfrage([{ ...still, erstelltIso: null }], 'still')).toBe('/api/sicherheit/auftraege');
+    const spaet = spaeteQuittungen([still, ...andere], [eintrag({ status: 'angewandt', quittungText: 'Stufe gesetzt.', quittiertIso: '2026-10-24T12:20:00.000Z' })]);
+    expect(spaet.geaendert).toBe(true);
+    expect(spaet.auftraege[0]).toMatchObject({ status: 'angewandt', text: 'Stufe gesetzt.', quittiertIso: '2026-10-24T12:20:00.000Z' });
+    expect(spaet.auftraege[1]).toBe(andere[0]);
+    expect(spaet.auftraege[2]).toBe(andere[1]); // nur der gelbe ändert sich, ein laufender gehört dem Takt
+    expect(spaeteQuittungen([still], [eintrag()]).geaendert).toBe(false); // noch offen: bleibt gelb
+    expect(spaeteQuittungen([still], [eintrag({ status: 'fehler', quittungText: 'Kein offener Befund.' })]).auftraege[0])
+      .toMatchObject({ status: 'fehler', text: 'Kein offener Befund.' });
+  });
+
   it('rueckmeldung_auch_ohne_verlauf: scheitert der Abruf (null), erreicht ein Auftrag die 10-Minuten-Grenze trotzdem', () => {
     const vorher = [laufend(), laufend({ id: null as unknown as string, ziel: 'site:x:stufe' })];
     const davor = rueckmeldungAuswerten(vorher, null, GESENDET + 10 * 60_000 - 1);
@@ -544,7 +599,8 @@ describe('Einbettung ins Skript der Seite', () => {
   it('alle Funktionen sind eingebettet', () => {
     const namen = DARSTELLUNG_FUNKTIONEN.map((f) => f.name);
     for (const f of [ampelText, liegezeitText, standAlterText, kopfSatz, waechterText, auftragNachVerlauf, verlaufAnfrage, flottePasst,
-      urteileFuerLage, rueckfrageText, aktuellesAlter, standNeuLaden, rueckmeldungAuswerten, zugangVerloren, seiteAusHash, wirksameAuswahl]) {
+      urteileFuerLage, rueckfrageText, aktuellesAlter, standNeuLaden, rueckmeldungAuswerten, zugangVerloren, seiteAusHash, wirksameAuswahl,
+      verschwundeneSites, spaeteQuittungen]) {
       expect(namen).toContain(f.name);
     }
     expect(new Set(namen).size).toBe(namen.length);
@@ -566,7 +622,8 @@ describe('Einbettung ins Skript der Seite', () => {
     // eslint-disable-next-line no-new-func
     const nachgebaut = new Function(`${quelle}\nreturn { ${namen.join(', ')} };`)() as Record<string, (...a: unknown[]) => unknown>;
     expect(nachgebaut.kopfSatz(BEISPIEL.kennzahlen)).toBe(kopfSatz(BEISPIEL.kennzahlen));
-    expect(nachgebaut.waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen)).toEqual(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen));
+    const spaeter = Date.parse(BEISPIEL.runde.beendetIso) + 200 * 60_000;
+    expect(nachgebaut.waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen, spaeter)).toEqual(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen, spaeter));
     expect(nachgebaut.standAlterText(121)).toEqual(standAlterText(121));
     expect(nachgebaut.eintraegeDerSite(LAGE, 'kunde.de', FLOTTE)).toEqual(eintraegeDerSite(LAGE, 'kunde.de', FLOTTE));
     expect(FLOTTE.map((z) => nachgebaut.flottePasst(z, { ampel: 'alle', welt: 'alle', stufe: 'alle', suche: 'kein ssh' }, true)))

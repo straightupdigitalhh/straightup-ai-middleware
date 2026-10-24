@@ -61,7 +61,7 @@ a { color: inherit; }
 .sl-links a { color: var(--fg-muted); font-size: .85rem; }
 .sl-kernsatz { font-size: 1.05rem; max-width: 72ch; }
 .sl-stand, .sl-notiz { color: var(--fg-muted); font-size: .85rem; max-width: 92ch; }
-.sl-stand .sl-rot { font-weight: 600; }
+.sl-stand .sl-rot, .sl-stand.sl-rot { font-weight: 600; }
 #ansichten { display: grid; gap: 22px; }
 .sl-hinweis { border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); background: color-mix(in srgb, var(--bad) 8%, var(--bg)); border-radius: 10px; padding: 10px 14px; }
 .sl-hinweis a { font-weight: 600; }
@@ -157,10 +157,20 @@ input.sl-eingabe[type="search"], input.sl-eingabe[type="text"] { width: min(100%
 .sl-rueckfrage { border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--line)); background: color-mix(in srgb, var(--warn) 8%, var(--bg)); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; font-size: .8rem; max-width: 48ch; cursor: default; }
 `;
 
+/**
+ * Lässt sich der Text in einen <script>-Block setzen? Nicht, wenn er den Block beenden
+ * oder den Parser in den Kommentarmodus schicken könnte: kein „</script" und kein „<!--",
+ * in keiner Schreibweise.
+ */
+export function einbettbar(text: string): boolean {
+  return !/<\/script|<!--/i.test(text);
+}
+
 /** Die Seite ohne Daten; alles Weitere holt ihr Skript. */
 export function renderSicherheitSeite(opts: { zweiterFaktorPfad: string }): string {
   const funktionen = DARSTELLUNG_FUNKTIONEN.map(String).join('\n');
-  if (funktionen.includes('</script')) throw new Error('darstellung.ts enthält "</script" und lässt sich nicht einbetten.');
+  const client = skript(opts.zweiterFaktorPfad);
+  if (!einbettbar(funktionen + '\n' + client)) throw new Error('Das Skript der Seite enthält "</script" oder "<!--" und lässt sich nicht einbetten.');
   return `<!doctype html>
 <html lang="de">
 <head>
@@ -303,7 +313,7 @@ export function renderSicherheitSeite(opts: { zweiterFaktorPfad: string }): stri
 ${funktionen}
 </script>
 <script>
-${skript(opts.zweiterFaktorPfad)}
+${client}
 </script>
 </body>
 </html>
@@ -453,10 +463,26 @@ function skript(zweiterFaktorPfad: string): string {
       }
       st.antwort = r.koerper;
       st.geladenMs = Date.now();
+      st.ohneZugang = false; // ein gelungener Abruf gibt das automatische Nachladen wieder frei
       document.getElementById('hinweis').hidden = true;
       zeichne();
+      pruefeStille();
     });
     return st.laedt;
+  }
+  /**
+   * Gelb gewordene Aufträge („der Kern meldet sich nicht“) einmal gegen den Verlauf prüfen: Kommt die Quittung
+   * später, zeigt die Zeile sie. Nur beim Nachladen des Stands, ohne eigenen Takt.
+   */
+  function pruefeStille() {
+    var url = verlaufAnfrage(st.auftraege.filter(function (a) { return a.id !== null; }), 'still');
+    if (url === null) return;
+    holeJson(url).then(function (r) {
+      if (!r.ok || !Array.isArray(r.koerper.auftraege)) return;
+      var ergebnis = spaeteQuittungen(st.auftraege, r.koerper.auftraege);
+      ergebnis.auftraege.forEach(function (b, i) { if (b !== st.auftraege[i]) Object.assign(st.auftraege[i], b); });
+      if (ergebnis.geaendert) zeichne();
+    });
   }
 
   // ─── Aufträge und Rückmeldung ───
@@ -541,7 +567,11 @@ function skript(zweiterFaktorPfad: string): string {
     // Weiter nach Erfolg und nach Fehler (etwa einem Fehler beim Zeichnen): Sonst endete das Fragen still,
     // und die Aufträge blieben auf „wird übernommen“, ohne je den gelben Satz zu erreichen.
     function weiter() { planeTakt(TAKT_MS); }
-    Promise.all(arbeit).then(weiter, weiter);
+    Promise.all(arbeit).then(weiter, function (fehler) {
+      // Eine Spur für die ersten Wochen: nur die Meldung, nie ein Schlüssel oder Daten des Stands.
+      console.error('Sicherheit: ein Schritt der Rückmeldung ist fehlgeschlagen: ' + (fehler && fehler.message ? fehler.message : String(fehler)));
+      weiter();
+    });
   }
   function verlaufAuswerten(r) {
     // Erst der Zustand (rein, ohne Anzeige): Die 10-Minuten-Grenze greift auch, wenn der Abruf scheiterte
@@ -552,6 +582,7 @@ function skript(zweiterFaktorPfad: string): string {
     if (eintraege === null && zugangVerloren(r.status)) st.ohneZugang = true;
     var hinweis = document.getElementById('hinweis');
     if (eintraege !== null) {
+      st.ohneZugang = false;
       if (hinweis.getAttribute('data-von') === 'verlauf') hinweis.hidden = true;
     } else {
       // Ohne Verlauf läuft die Frist weiter; der Hinweis sagt, dass es an der Verbindung liegt und nicht am Kern.
@@ -608,9 +639,9 @@ function skript(zweiterFaktorPfad: string): string {
     var a = standAlterText(aktuellesAlter(st.antwort.alterMinuten, st.geladenMs, Date.now()));
     alter.textContent = a.text + ' (' + zeitText(st.antwort.empfangenIso) + ')' + (a.rot ? '. Der Kern schickt sonst alle fünf Minuten einen neuen.' : '.');
     alter.className = a.rot ? 'sl-rot' : '';
-    var w = waechterText(s.runde, s.waechter ? s.waechter.quellen : []);
+    var w = waechterText(s.runde, s.waechter ? s.waechter.quellen : [], Date.now());
     waechter.textContent = w.text;
-    waechter.className = 'sl-stand' + (w.warnung ? ' sl-gelb' : '');
+    waechter.className = 'sl-stand' + (w.rot ? ' sl-rot' : w.warnung ? ' sl-gelb' : '');
   }
 
   function zeichneRueckmeldungen() {
@@ -756,22 +787,26 @@ function skript(zweiterFaktorPfad: string): string {
     tr.append(td);
     return tr;
   }
-  /** Die Urteile einer Zeile der Lage; Sammel- und Quellenzeilen nur erledigt und stumm (urteileFuerLage). */
+  /**
+   * Die Urteile einer Zeile der Lage und der Akte (urteileFuerLage): Sammel- und Quellenzeilen nur erledigt und
+   * stumm; ein I6 „aufgeräumt“ nur mit verschwundener Installation in der Aufräum-Liste, sonst nur „stumm bis“.
+   */
   function urteile(z) {
     var ziel = 'lage:' + z.befundId;
+    var aufraeumen = liste((stand() || {}).aufraeumen);
     if (rueckfrageOffen(ziel, 'kein-hack')) {
       return mitRueck(rueckfrageBox(rueckfrageText('kein-hack', z), 'Ja, kein Hack', function () {
         sende(auftragFuerLage(z, 'kein-hack'), ziel, URTEIL_TEXT['kein-hack'] + ': ' + siteText(z.site) + ', ' + z.typ);
       }), ziel);
     }
     if (rueckfrageOffen(ziel, 'aufgeraeumt')) {
-      return mitRueck(rueckfrageBox(rueckfrageText('aufgeraeumt', z), 'Ja, aufräumen', function () {
+      return mitRueck(rueckfrageBox(rueckfrageText('aufgeraeumt', z, aufraeumen), 'Ja, aufräumen', function () {
         sende(auftragFuerLage(z, 'aufgeraeumt'), ziel, 'aufgeräumt: ' + siteText(z.site));
       }), ziel);
     }
     var aus = laeuft(ziel);
     var box = el('div', 'sl-aktionen');
-    urteileFuerLage(z).forEach(function (art) {
+    urteileFuerLage(z, aufraeumen).forEach(function (art) {
       if (art === 'stumm') {
         var feld = datumsfeld('stumm:' + z.befundId, inTagen(7), aus);
         box.append(feld, knopf(URTEIL_TEXT[art], function () {
@@ -1021,7 +1056,7 @@ function skript(zweiterFaktorPfad: string): string {
     var box = el('div', 'sl-aktionen');
     if (z.grund === 'verschwunden') {
       if (rueckfrageOffen(ziel, 'aufgeraeumt')) {
-        return mitRueck(rueckfrageBox(rueckfrageText('aufgeraeumt', i6), 'Ja, aufräumen', function () {
+        return mitRueck(rueckfrageBox(rueckfrageText('aufgeraeumt', i6, liste(s.aufraeumen)), 'Ja, aufräumen', function () {
           sende(auftragFuerLage(i6, 'aufgeraeumt'), ziel, 'aufgeräumt: ' + siteText(i6.site));
         }), ziel);
       }
@@ -1068,10 +1103,10 @@ function skript(zweiterFaktorPfad: string): string {
 
   function zeichneWaechter(s) {
     var w = s.waechter || {};
-    var zustand = waechterText(s.runde, w.quellen);
+    var zustand = waechterText(s.runde, w.quellen, Date.now());
     var zeile = document.getElementById('waechter-zustand');
     zeile.textContent = zustand.text;
-    zeile.className = 'sl-notiz' + (zustand.warnung ? ' sl-gelb' : '');
+    zeile.className = 'sl-notiz' + (zustand.rot ? ' sl-rot' : zustand.warnung ? ' sl-gelb' : '');
     tabelle('waechter-runden', [
       { titel: 'Runde', wert: function (r) { return r.id; }, klasse: 'sl-num' },
       { titel: 'gestartet', wert: function (r) { return r.gestartetIso; }, zelle: function (r) { return zeitText(r.gestartetIso); }, klasse: 'sl-nw' },

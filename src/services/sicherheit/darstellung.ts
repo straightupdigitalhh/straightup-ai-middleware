@@ -211,19 +211,29 @@ export function kopfSatz(kennzahlen: unknown): string {
   return satz + ' Alle ' + n + ' Installationen sind von innen noch nicht geprüft (ab Teil 2).';
 }
 
-/** Der Zustand des Wächters für die Kopfzeile: letzte Runde und ausgefallene Quellen (mit ihrer Ausfallserie). */
-export function waechterText(runde: Runde | null | undefined, quellen: QuellenZustand[] | null | undefined): { text: string; warnung: boolean } {
-  if (!runde) return { text: 'Wächter: noch keine Runde beendet.', warnung: true };
+/**
+ * Der Zustand des Wächters für die Kopfzeile: letzte Runde und ausgefallene Quellen (mit ihrer Ausfallserie).
+ * Der Kern schiebt den Stand alle fünf Minuten, die Runde läuft stündlich: Liegt das Ende der letzten Runde
+ * 120 Minuten oder länger zurück (`jetztMs`), ist die Zeile rot, auch wenn der Stand frisch ist. Ohne
+ * beendete Runde ein neutraler Satz.
+ */
+export function waechterText(runde: Runde | null | undefined, quellen: QuellenZustand[] | null | undefined, jetztMs: number): { text: string; warnung: boolean; rot: boolean } {
+  if (!runde) return { text: 'Wächter: noch keine Runde beendet.', warnung: false, rot: false };
+  var seitMin = Math.floor((jetztMs - Date.parse(runde.beendetIso)) / 60000);
+  if (seitMin >= 120) {
+    var seit = seitMin < 48 * 60 ? zahlWort(Math.floor(seitMin / 60), 'Stunde', 'Stunden') : Math.floor(seitMin / (24 * 60)) + ' Tagen';
+    return { text: 'Wächter: seit ' + seit + ' keine Runde beendet (zuletzt Runde ' + runde.id + ' am ' + zeitText(runde.beendetIso) + ').', warnung: true, rot: true };
+  }
   var aus = runde.quellen && Array.isArray(runde.quellen.ausgefallen) ? runde.quellen.ausgefallen : [];
   var ok = runde.quellen && typeof runde.quellen.ok === 'number' ? runde.quellen.ok : 0;
   var liste = Array.isArray(quellen) ? quellen : [];
   var text = 'Wächter: Runde ' + runde.id + ' beendet ' + zeitText(runde.beendetIso) + ', ';
-  if (aus.length === 0) return { text: text + 'alle ' + zahlWort(ok, 'Quelle', 'Quellen') + ' in Ordnung.', warnung: false };
+  if (aus.length === 0) return { text: text + 'alle ' + zahlWort(ok, 'Quelle', 'Quellen') + ' in Ordnung.', warnung: false, rot: false };
   var namen = aus.map(function (name) {
     var q = liste.find(function (x) { return x.quelle === name; });
     return q && q.ausfallserie > 1 ? name + ' (seit ' + q.ausfallserie + ' Runden)' : name;
   });
-  return { text: text + zahlWort(ok, 'Quelle', 'Quellen') + ' in Ordnung, ausgefallen: ' + namen.join(', ') + '.', warnung: true };
+  return { text: text + zahlWort(ok, 'Quelle', 'Quellen') + ' in Ordnung, ausgefallen: ' + namen.join(', ') + '.', warnung: true, rot: false };
 }
 
 // ─── Felder ──────────────────────────────────────────────────────
@@ -359,34 +369,52 @@ export function i6FuerSite(lage: LageZeile[], site: string): LageZeile | null {
 
 // ─── Urteile und Aufträge ────────────────────────────────────────
 
+/** Eine Zeile der Aufräum-Liste, so weit die Lage sie braucht. */
+export interface AufraeumZeile { site: string; grund: string }
+
+/**
+ * Die Sites eines I6 (er selbst oder die Mitglieder eines Sammelbefunds), für die die
+ * Aufräum-Liste eine verschwundene Installation führt. Nur dort nimmt „aufgeräumt"
+ * etwas aus dem Inventar. Hosts wie beim Kern verglichen (hostForm).
+ */
+export function verschwundeneSites(zeile: LageZeile, aufraeumen: AufraeumZeile[] | null | undefined): string[] {
+  var weg = (aufraeumen || []).filter(function (a) { return a.grund === 'verschwunden'; }).map(function (a) { return hostForm(a.site); });
+  var sites = zeile.site === '_alle' ? (zeile.mitglieder || []) : [zeile.site];
+  return sites.filter(function (s) { return weg.indexOf(hostForm(s)) >= 0; });
+}
+
 /**
  * Die Urteile, die eine Zeile der Lage anbietet. Jede Zeile einer Site: erledigt,
  * stumm und stimmt; „kein Hack" nur, wo ein Hack in Frage steht (A1 Hack-Verdacht,
  * A2 Cloaking, B6c deutlich veränderte Startseite). Ein Aufräum-Eintrag (I6) heißt
- * „aufgeraeumt" statt erledigt: Der Kern nimmt dann Installationen aus dem Inventar.
- * Sammel- und Quellenzeilen (`_alle`, `_quelle:<name>`) kennen nur erledigt (beim
- * I6 „aufgeraeumt") und stumm; einen Sammel-A7 schließt der Kern nicht (er übernimmt
- * DNS nur je Site), er bleibt stumm.
+ * „aufgeraeumt" statt erledigt und steht nur da, wo die Aufräum-Liste eine
+ * verschwundene Installation führt (`verschwundeneSites`); sonst bietet er nur
+ * „stumm bis" (und „stimmt"). Sammel- und Quellenzeilen (`_alle`, `_quelle:<name>`)
+ * kennen nur erledigt (beim I6 „aufgeraeumt") und stumm; einen Sammel-A7 schließt
+ * der Kern nicht (er übernimmt DNS nur je Site), er bleibt stumm.
  */
-export function urteileFuerLage(zeile: LageZeile): string[] {
-  var schliessen = zeile.typ === 'I6' ? 'aufgeraeumt' : 'erledigt';
-  if (zeile.site.charAt(0) === '_') return zeile.typ === 'A7' ? ['stumm'] : [schliessen, 'stumm'];
-  if (['A1', 'A2', 'B6c'].indexOf(zeile.typ) >= 0) return [schliessen, 'stumm', 'stimmt', 'kein-hack'];
-  return [schliessen, 'stumm', 'stimmt'];
+export function urteileFuerLage(zeile: LageZeile, aufraeumen?: AufraeumZeile[] | null): string[] {
+  var schliessen = zeile.typ !== 'I6' ? 'erledigt' : verschwundeneSites(zeile, aufraeumen).length > 0 ? 'aufgeraeumt' : '';
+  var urteile = schliessen ? [schliessen, 'stumm'] : ['stumm'];
+  if (zeile.site.charAt(0) === '_') return zeile.typ === 'A7' ? ['stumm'] : urteile;
+  urteile.push('stimmt');
+  if (['A1', 'A2', 'B6c'].indexOf(zeile.typ) >= 0) urteile.push('kein-hack');
+  return urteile;
 }
 
 /**
  * Die Rückfrage vor den beiden Aktionen, die nicht mit einem Klick abgehen: Sie
- * sagt, was passiert. `zeile` ist bei „aufgeraeumt" der I6, auf den der Auftrag geht.
+ * sagt, was passiert. `zeile` ist bei „aufgeraeumt" der I6, auf den der Auftrag geht;
+ * bei einem Sammel-I6 zählt sie nur die Sites mit verschwundener Installation.
  */
-export function rueckfrageText(art: string, zeile: LageZeile): string {
+export function rueckfrageText(art: string, zeile: LageZeile, aufraeumen?: AufraeumZeile[] | null): string {
   if (art === 'kein-hack') {
     return (zeile.klasse === 'alarm' ? 'Der Alarm' : 'Der Befund') + ' „' + zeile.titel + '“ bei ' + siteText(zeile.site)
       + ' wird mit dem Urteil „kein Hack“ geschlossen.';
   }
   if (art === 'aufgeraeumt') {
     var wessen = zeile.site === '_alle'
-      ? 'der ' + zahlWort((zeile.mitglieder || []).length, 'Site', 'Sites') + ' dieses Sammelbefunds'
+      ? 'der ' + zahlWort(verschwundeneSites(zeile, aufraeumen).length, 'Site', 'Sites') + ' dieses Sammelbefunds'
       : 'von ' + zeile.site;
     return 'Die verschwundenen Installationen ' + wessen + ' werden aus dem Inventar entfernt. Auf den Servern wird nichts gelöscht.';
   }
@@ -426,10 +454,12 @@ export function apiFehlerText(status: number, koerper: unknown): { text: string;
  * Fragen auf). Kennt die Seite die Erstellzeit jedes laufenden Auftrags, fragt sie
  * ab der frühesten (der Verlauf filtert nach Erstellung); fehlt eine noch (gleich
  * nach dem Abschicken antwortet die API nur mit der ID), fragt sie ohne `seit`
- * nach den jüngsten.
+ * nach den jüngsten. Mit `status` „still" dasselbe für gelb gewordene Aufträge
+ * (die Nachprüfung beim Nachladen des Stands).
  */
-export function verlaufAnfrage(auftraege: SeitenAuftrag[]): string | null {
-  var laufende = auftraege.filter(function (a) { return a.status === 'laeuft'; });
+export function verlaufAnfrage(auftraege: SeitenAuftrag[], status?: string): string | null {
+  var gesucht = status || 'laeuft';
+  var laufende = auftraege.filter(function (a) { return a.status === gesucht; });
   if (laufende.length === 0) return null;
   if (laufende.some(function (a) { return !a.erstelltIso; })) return '/api/sicherheit/auftraege';
   var frueheste = laufende.map(function (a) { return a.erstelltIso as string; }).sort()[0];
@@ -481,6 +511,26 @@ export function rueckmeldungAuswerten(
   return { auftraege: neu, geaendert: geaendert, quittiert: quittiert };
 }
 
+/**
+ * Späte Quittungen: Ein gelb gewordener Auftrag („der Kern meldet sich nicht")
+ * übernimmt angewandt oder fehler, wenn der Verlauf sie inzwischen nennt. Die Seite
+ * prüft das nur beim Nachladen des Stands, ohne eigenen Takt.
+ */
+export function spaeteQuittungen(auftraege: SeitenAuftrag[], eintraege: VerlaufEintrag[]): { auftraege: SeitenAuftrag[]; geaendert: boolean } {
+  var jeId: Record<string, VerlaufEintrag> = {};
+  eintraege.forEach(function (e) { if (e && typeof e.id === 'string') jeId[e.id] = e; });
+  var geaendert = false;
+  var neu = auftraege.map(function (a) {
+    var e = a.id ? jeId[a.id] : undefined;
+    if (a.status !== 'still' || !e || (e.status !== 'angewandt' && e.status !== 'fehler')) return a;
+    geaendert = true;
+    return Object.assign({}, a, {
+      status: e.status, text: e.quittungText || (e.status === 'angewandt' ? 'übernommen' : 'vom Kern abgelehnt'), quittiertIso: e.quittiertIso,
+    }) as SeitenAuftrag;
+  });
+  return { auftraege: neu, geaendert: geaendert };
+}
+
 // ─── Reiter und Filter ───────────────────────────────────────────
 
 /** Der Reiter zu einem Hash der Adresse (#flotte), sonst null. */
@@ -517,5 +567,5 @@ export const DARSTELLUNG_FUNKTIONEN = [
   datumText, tagText, kopfSatz, waechterText, siteText, weltText, stufeName, quelleText, stufeText, merkerText, kundeText,
   vertragText, ausgeliefertText, mysitesText, backupText, hostForm, siteFuerHost, eintraegeDerSite, i6FuerSite,
   urteileFuerLage, rueckfrageText, auftragFuerLage, apiFehlerText, verlaufAnfrage, auftragNachVerlauf,
-  rueckmeldungAuswerten, seiteAusHash, wirksameAuswahl, flottePasst,
+  rueckmeldungAuswerten, spaeteQuittungen, verschwundeneSites, seiteAusHash, wirksameAuswahl, flottePasst,
 ];

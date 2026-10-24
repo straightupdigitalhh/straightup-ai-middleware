@@ -16,6 +16,7 @@ import { createApiAuth, createPageAuth } from '../src/services/auth.js';
 import { FixedWindowLimiter } from '../src/services/rate-limit.js';
 import { SicherheitSpeicher } from '../src/services/sicherheit/speicher.js';
 import { DARSTELLUNG_FUNKTIONEN, kopfSatz, standAlterText, waechterText } from '../src/services/sicherheit/darstellung.js';
+import { einbettbar, renderSicherheitSeite } from '../src/services/sicherheit/seite.js';
 import {
   ZWEITER_FAKTOR_PFAD,
   createSicherheitDienstRouter,
@@ -252,7 +253,8 @@ describe('Die Seite /sicherheit', () => {
     expect(imSkript.standAlterText(119)).toEqual(standAlterText(119));
     expect(imSkript.standAlterText(121)).toEqual(standAlterText(121));
     expect(imSkript.kopfSatz(BEISPIEL.kennzahlen)).toBe(kopfSatz(BEISPIEL.kennzahlen));
-    expect(imSkript.waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen)).toEqual(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen));
+    const spaeter = Date.parse(BEISPIEL.runde.beendetIso) + 121 * 60_000;
+    expect(imSkript.waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen, spaeter)).toEqual(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen, spaeter));
   });
 
   /** Die reinen Funktionen so, wie sie im ausgelieferten Skript stehen. */
@@ -270,21 +272,23 @@ describe('Die Seite /sicherheit', () => {
       const urteile: string[] = imSkript.urteileFuerLage({ ...vorbild, typ });
       expect(urteile, typ).toContain('stimmt');
       expect(urteile.includes('kein-hack'), typ).toBe(['A1', 'A2', 'B6c'].includes(typ));
-      expect(urteile[0], typ).toBe(typ === 'I6' ? 'aufgeraeumt' : 'erledigt');
+      expect(urteile[0], typ).toBe(typ === 'I6' ? 'stumm' : 'erledigt'); // diese Site hat keine verschwundene Installation
     }
     for (const z of BEISPIEL.lage) {
       const urteile: string[] = imSkript.urteileFuerLage(z);
       expect(urteile.includes('stimmt'), `${z.befundId}`).toBe(!z.site.startsWith('_'));
     }
     expect(imSkript.urteileFuerLage({ ...vorbild, site: '_alle', typ: 'B6c' })).toEqual(['erledigt', 'stumm']);
-    expect(imSkript.urteileFuerLage({ ...vorbild, site: '_alle', typ: 'I6' })).toEqual(['aufgeraeumt', 'stumm']);
+    expect(imSkript.urteileFuerLage({ ...vorbild, site: '_alle', typ: 'I6' })).toEqual(['stumm']);
+    const verwaist = BEISPIEL.lage.find((z: any) => z.befundId === 4);
+    expect(imSkript.urteileFuerLage(verwaist, BEISPIEL.aufraeumen)).toEqual(['aufgeraeumt', 'stumm', 'stimmt']);
     // Das Skript baut die Knöpfe aus urteileFuerLage und fragt vor „kein Hack" und „aufgeräumt" einmal nach,
     // in der Lage (z) wie in der Ansicht Aufräumen (i6).
     const client = skript(res.text, null);
-    expect(client).toContain('urteileFuerLage(z)');
+    expect(client).toContain('urteileFuerLage(z, aufraeumen)');
     expect(client).toContain("rueckfrageText('kein-hack', z)");
-    expect(client).toContain("rueckfrageText('aufgeraeumt', z)");
-    expect(client).toContain("rueckfrageText('aufgeraeumt', i6)");
+    expect(client).toContain("rueckfrageText('aufgeraeumt', z, aufraeumen)");
+    expect(client).toContain("rueckfrageText('aufgeraeumt', i6, liste(s.aufraeumen))");
     expect(imSkript.rueckfrageText('kein-hack', vorbild)).toContain('mit dem Urteil „kein Hack“ geschlossen');
   });
 
@@ -304,7 +308,8 @@ describe('Die Seite /sicherheit', () => {
   it('takt_und_abrufe_enden_nie_still: der Takt geht nach Erfolg und Fehler weiter, jeder Abruf bricht nach 30 Sekunden ab, die Grenze gilt auch ohne Verlauf', async () => {
     const { res } = await bestaetigteSeite();
     const client = skript(res.text, null);
-    expect(client).toContain('Promise.all(arbeit).then(weiter, weiter)');
+    expect(client).toContain('Promise.all(arbeit).then(weiter, function (fehler) {');
+    expect(client).toContain("console.error('Sicherheit: ein Schritt der Rückmeldung ist fehlgeschlagen: '");
     expect(client).toContain('new AbortController()');
     expect(client).toContain('var ZEITLIMIT_MS = 30000;');
     expect(client).toContain('rueckmeldungAuswerten(st.auftraege, eintraege, Date.now())');
@@ -323,6 +328,32 @@ describe('Die Seite /sicherheit', () => {
     const imSkript = ausDemSkript(res.text);
     expect(imSkript.seiteAusHash('#aufraeumen')).toBe('aufraeumen');
     expect(imSkript.wirksameAuswahl(['alle', 'mstudio'], 'altwelt')).toBe('alle');
+  });
+
+  it('stehende_runde_in_der_kopfzeile: die Wächterzeile rechnet mit der Uhr (alle 30 Sekunden neu) und wird rot', async () => {
+    const { res } = await bestaetigteSeite();
+    const client = skript(res.text, null);
+    expect(client).toContain('waechterText(s.runde, s.waechter ? s.waechter.quellen : [], Date.now())');
+    expect(client).toContain("(w.rot ? ' sl-rot' : w.warnung ? ' sl-gelb' : '')");
+  });
+
+  it('ohne_zugang_nach_jedem_erfolg_zurueck: ein gelungener Abruf des Stands oder des Verlaufs gibt das Nachladen wieder frei', async () => {
+    const { res } = await bestaetigteSeite();
+    const client = skript(res.text, null);
+    expect(client.split('st.ohneZugang = false;').length - 1).toBe(3); // „neu laden“, Stand gelungen, Verlauf gelungen
+  });
+
+  it('spaete_quittung_beim_nachladen: nach jedem gelungenen Stand fragt das Skript einmal nach gelb gewordenen Aufträgen', async () => {
+    const { res } = await bestaetigteSeite();
+    const client = skript(res.text, null);
+    expect(client).toContain("verlaufAnfrage(st.auftraege.filter(function (a) { return a.id !== null; }), 'still')");
+    expect(client).toContain('spaeteQuittungen(st.auftraege, r.koerper.auftraege)');
+  });
+
+  it('einbettbar_prueft_skriptenden_und_kommentare: weder </script noch <!-- in irgendeiner Schreibweise', () => {
+    expect(einbettbar('function a() { return 1; }')).toBe(true);
+    for (const boese of ['x</script>', 'x</SCRIPT>', 'x</Script', '<!-- y', 'a<!--b']) expect(einbettbar(boese), boese).toBe(false);
+    expect(() => renderSicherheitSeite({ zweiterFaktorPfad: '/sicherheit/zweiter-faktor' })).not.toThrow();
   });
 
   it('die notiz_der_lage nennt, was Sammelzeilen anbieten', async () => {
