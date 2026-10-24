@@ -83,6 +83,38 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE teamboard_einstellungen ADD COLUMN filter TEXT;
   `,
+  // v5: Sicherheitsplattform Teil 1. Nur neue Tabellen, nichts Bestehendes
+  // wird angefasst. sicherheit_stand hat genau eine Zeile (der letzte Stand
+  // des Wachdienstes), sicherheit_kennzahlen je Berliner Tag eine,
+  // sicherheit_auftraege jeden Auftrag aus dem Dashboard samt Quittung
+  // (services/sicherheit/speicher.ts). Auftrags-IDs sind UUIDs und werden nie
+  // wieder vergeben: der Kern behält jede bekannte ID für immer.
+  `
+  CREATE TABLE sicherheit_stand (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    stand     TEXT NOT NULL,
+    empfangen TEXT NOT NULL
+  );
+
+  CREATE TABLE sicherheit_kennzahlen (
+    tag        TEXT PRIMARY KEY,
+    kennzahlen TEXT NOT NULL,
+    empfangen  TEXT NOT NULL
+  );
+
+  CREATE TABLE sicherheit_auftraege (
+    id            TEXT PRIMARY KEY,
+    art           TEXT NOT NULL,
+    site          TEXT NOT NULL,
+    typ           TEXT,
+    werte         TEXT NOT NULL,
+    durch         TEXT NOT NULL,
+    erstellt      TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'offen' CHECK (status IN ('offen', 'angewandt', 'fehler')),
+    quittung_text TEXT,
+    quittiert     TEXT
+  );
+  `,
 ];
 
 export function openDb(filePath: string): DatabaseSync {

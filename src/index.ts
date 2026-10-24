@@ -36,6 +36,13 @@ import { erstelleKommentarAutomation, erstelleLaufAufraeumAutomation } from './s
 import { TeamboardEinstellungenStore } from './core/teamboard-einstellungen.js';
 import { TeamboardErledigungenStore } from './core/teamboard-erledigungen.js';
 import { renderSeite } from './services/teamboard/seite.js';
+import { SicherheitSpeicher } from './services/sicherheit/speicher.js';
+import {
+  createSicherheitDienstRouter,
+  createSicherheitNutzerRouter,
+  fehlendeSicherheitKonfig,
+  leseSicherheitKonfig,
+} from './routes/sicherheit.js';
 
 // ─── Konfiguration prüfen ────────────────────────────────────────
 
@@ -125,6 +132,25 @@ const teamboardErledigenDienst = erstelleErledigenDienst({
 scheduler.register(erstelleKommentarAutomation(teamboardErledigenDienst));
 scheduler.register(erstelleLaufAufraeumAutomation(scheduler));
 
+// ─── Sicherheitsplattform (Teil 1) ───────────────────────────────
+// Speicher (Stand, Kennzahlen, Aufträge) in derselben Datenbank. Zwei Router
+// teilen sich diese Abhängigkeiten, hängen aber an verschiedenen Stellen der
+// App (siehe unten). Fehlt SICHERHEIT_DIENSTSCHLUESSEL oder SICHERHEIT_NUTZER,
+// antwortet jeder Pfad unter /api/sicherheit mit 503.
+
+const sicherheitKonfig = leseSicherheitKonfig(process.env);
+const sicherheitDeps = {
+  speicher: new SicherheitSpeicher(db),
+  ...sicherheitKonfig,
+  // Task 9 ersetzt das durch die Prüfung der Session (TOTP). Bis dahin bleibt
+  // jeder Nutzer-Endpunkt zu (403 mit Hinweis auf /sicherheit/zweiter-faktor).
+  zweiterFaktorBestaetigt: () => false,
+};
+const sicherheitFehlt = fehlendeSicherheitKonfig(sicherheitKonfig);
+console.log(sicherheitFehlt.length === 0
+  ? '🛡️ Sicherheitsplattform aktiv'
+  : `🛡️ Sicherheitsplattform aus (${sicherheitFehlt.join(', ')} nicht gesetzt)`);
+
 // ─── Microsoft Graph (E-Mail-Polling + Mail-Versand) ─────────────
 // MS_MAILBOXES: kommagetrennte Liste der Postfächer, in denen die
 // Kategorie "→ awork" beobachtet wird (z. B. Jan + Gabi).
@@ -194,6 +220,14 @@ app.use(helmet({
 // die Hälfte. Kleine Antworten lässt die Middleware-eigene Schwelle
 // (Default 1 KB) unangetastet.
 app.use(compression());
+
+// ─── Sicherheitsplattform: Dienst-Endpunkte (Wachdienst im Agenten-Haus) ──
+// Eigener Schlüssel (X-Dienst-Schluessel), deshalb VOR der /api-Auth, und VOR
+// dem globalen JSON-Parser, weil POST /api/sicherheit/stand bis 10 MB groß
+// sein darf (das globale Limit liegt bei 5 MB). Der Router prüft den Schlüssel,
+// bevor er den Körper liest, und beantwortet bei fehlender Konfiguration
+// jeden Pfad unter /api/sicherheit mit 503; alles Übrige reicht er weiter.
+app.use(createSicherheitDienstRouter(sicherheitDeps));
 
 // JSON + URL-encoded Body Parsing
 app.use(express.json({ limit: '5mb' }));
@@ -273,6 +307,10 @@ app.use(createTeamboardRouter({
   einstellungen: teamboardEinstellungen,
   erledigenDienst: teamboardErledigenDienst,
 })); // /api/teamboard/* (board/avatar: Session ODER Key; zeiten/einstellungen/erledigen/rueckgaengig: nur Session)
+// /api/sicherheit/* fürs Dashboard (Stand lesen, Aufträge anlegen und Verlauf): nur die
+// Session eines Kontos aus SICHERHEIT_NUTZER mit bestätigtem zweiten Faktor, nie der
+// Master-Key. Die Dienst-Endpunkte des Wachdienstes hängen weiter oben vor der Auth.
+app.use(createSicherheitNutzerRouter(sicherheitDeps));
 
 // GET /teamboard (HTML-Seite, nur Session — kein Master-Key, das ist kein
 // API-Client). Der Guard (createPageAuth) wird dem Router als Route-

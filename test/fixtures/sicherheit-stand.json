@@ -1,0 +1,853 @@
+{
+  "version": 1,
+  "erzeugtIso": "2026-10-24T12:00:00.000Z",
+  "runde": {
+    "id": 4,
+    "beendetIso": "2026-10-24T11:12:00.000Z",
+    "quellen": {
+      "ok": 9,
+      "ausgefallen": [
+        "collmex"
+      ]
+    }
+  },
+  "lage": [
+    {
+      "befundId": 1,
+      "typ": "A6",
+      "klasse": "alarm",
+      "site": "intern-dev.de",
+      "titel": "Zertifikat läuft ab / abgelaufen",
+      "text": "Zertifikat ist seit 2 Tagen abgelaufen (02.10., 10:00).",
+      "seitIso": "2026-10-04T07:00:00.000Z",
+      "liegezeitTage": 20,
+      "status": "stumm",
+      "stummBisIso": "2026-10-31T00:00:00.000Z",
+      "mitglieder": []
+    },
+    {
+      "befundId": 3,
+      "typ": "A1",
+      "klasse": "alarm",
+      "site": "kunde.de",
+      "titel": "Hack-Verdacht (mySites-Audit)",
+      "text": "Audit vom 24.10., 11:00 meldet „hacked“, verdächtige Dateien seit dem vorigen Audit von 3 auf 14 gestiegen.",
+      "seitIso": "2026-10-18T07:00:00.000Z",
+      "liegezeitTage": 6,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": []
+    },
+    {
+      "befundId": 5,
+      "typ": "I2",
+      "klasse": "alarm",
+      "site": "ohne-mysites.de",
+      "titel": "Wartungsstufe ohne mySites",
+      "text": "Stufe standard (VIP), aber die Site steht nicht in mySites: Audits, Backups und Updates laufen dort nicht.",
+      "seitIso": "2026-10-20T07:00:00.000Z",
+      "liegezeitTage": 4,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": []
+    },
+    {
+      "befundId": 10,
+      "typ": "A3",
+      "klasse": "alarm",
+      "site": "_alle",
+      "titel": "Backup überfällig bei 5 Sites",
+      "text": "kunde.de, muster-shop.de, wartung-a.de, wartung-b.de, wartung-c.de: vermutlich eine gemeinsame Ursache.",
+      "seitIso": "2026-10-23T03:30:00.000Z",
+      "liegezeitTage": 1,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": [
+        "kunde.de",
+        "muster-shop.de",
+        "wartung-a.de",
+        "wartung-b.de",
+        "wartung-c.de"
+      ]
+    },
+    {
+      "befundId": 2,
+      "typ": "B1",
+      "klasse": "befund",
+      "site": "kunde.de",
+      "titel": "Updates verfügbar",
+      "text": "Core 5.4.8 → 5.4.9, 2 Erweiterung(en).",
+      "seitIso": "2026-10-15T07:00:00.000Z",
+      "liegezeitTage": 9,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": []
+    },
+    {
+      "befundId": 4,
+      "typ": "I6",
+      "klasse": "befund",
+      "site": "verwaist.de",
+      "titel": "Aufräumen: Kandidat für die Aufräum-Liste",
+      "text": "In keiner Quelle mehr: altwelt:p100004:verwaist.de (seit 12 Tagen).",
+      "seitIso": "2026-10-19T07:00:00.000Z",
+      "liegezeitTage": 5,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": []
+    },
+    {
+      "befundId": 6,
+      "typ": "B1",
+      "klasse": "befund",
+      "site": "muster-shop.de",
+      "titel": "Updates verfügbar",
+      "text": "1 Erweiterung(en).",
+      "seitIso": "2026-10-21T07:00:00.000Z",
+      "liegezeitTage": 3,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": []
+    },
+    {
+      "befundId": 7,
+      "typ": "I1",
+      "klasse": "befund",
+      "site": "neu-site.de",
+      "titel": "Neu, nicht zugeordnet",
+      "text": "Seit 21.10., 14:00 im Inventar (unbekannt), noch keiner Stufe zugeordnet. Nach 7 Tagen wird daraus ein Alarm.",
+      "seitIso": "2026-10-21T12:00:00.000Z",
+      "liegezeitTage": 3,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": []
+    },
+    {
+      "befundId": 8,
+      "typ": "I4",
+      "klasse": "befund",
+      "site": "alt-vertrag.de",
+      "titel": "Wartungsvertrag ausgelaufen",
+      "text": "Der Wartungsvertrag endete am 31.03.2025, die Site wird bei uns weiter gehostet und antwortet mit HTTP 200. Vertrag erneuern oder Stufe ändern.",
+      "seitIso": "2026-10-22T07:00:00.000Z",
+      "liegezeitTage": 2,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": []
+    },
+    {
+      "befundId": 9,
+      "typ": "I9",
+      "klasse": "befund",
+      "site": "test-kopie.de",
+      "titel": "Aktiver Vertrag, aber nicht überwacht",
+      "text": "Für die Site läuft ein Wartungsvertrag, sie steht aber seit 01.09.2026 auf „nicht überwacht“ (Testkopie, wird im November gelöscht). Vertrag oder Einordnung klären.",
+      "seitIso": "2026-10-22T07:00:00.000Z",
+      "liegezeitTage": 2,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": []
+    },
+    {
+      "befundId": 11,
+      "typ": "I6",
+      "klasse": "befund",
+      "site": "intern-dev.de",
+      "titel": "Aufräumen: Kandidat für die Aufräum-Liste",
+      "text": "Stufe intern (Entwicklung, Vorlage, Migration oder eigenes Werkzeug), noch nicht aufgeräumt.",
+      "seitIso": "2026-10-23T07:00:00.000Z",
+      "liegezeitTage": 1,
+      "status": "offen",
+      "stummBisIso": null,
+      "mitglieder": []
+    }
+  ],
+  "flotte": [
+    {
+      "id": "mstudio:p-test06:/html",
+      "site": "alt-vertrag.de",
+      "kunde": {
+        "kundeNr": "10005",
+        "firma": "Demo e.K."
+      },
+      "vertrag": {
+        "aktiv": false,
+        "bisIso": "2025-03-31"
+      },
+      "stufe": "ohne",
+      "stufeQuelle": "automatisch",
+      "bestaetigt": false,
+      "merker": {},
+      "welt": "mstudio",
+      "server": null,
+      "account": "p-test06",
+      "pfad": "/html",
+      "domains": [
+        "alt-vertrag.de",
+        "www.alt-vertrag.de"
+      ],
+      "ausgeliefert": true,
+      "cms": "joomla",
+      "version": "5.4.8",
+      "php": "8.3.12",
+      "mysites": null,
+      "backup": null,
+      "erstmalsIso": "2026-06-01T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 0,
+      "befunde": 1,
+      "aeltesteLiegezeitTage": 2,
+      "ampel": "gelb",
+      "grund": "Wartungsvertrag ausgelaufen"
+    },
+    {
+      "id": "altwelt:p100003:intern-dev.de",
+      "site": "intern-dev.de",
+      "kunde": null,
+      "vertrag": null,
+      "stufe": "intern",
+      "stufeQuelle": "liste",
+      "bestaetigt": false,
+      "merker": {},
+      "welt": "altwelt",
+      "server": "r1002",
+      "account": "p100003",
+      "pfad": "/dev",
+      "domains": [
+        "intern-dev.de"
+      ],
+      "ausgeliefert": null,
+      "cms": "joomla",
+      "version": "4.4.9",
+      "php": null,
+      "mysites": null,
+      "backup": null,
+      "erstmalsIso": "2025-11-12T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 0,
+      "befunde": 1,
+      "aeltesteLiegezeitTage": 1,
+      "ampel": "gelb",
+      "grund": "Zertifikat läuft ab / abgelaufen"
+    },
+    {
+      "id": "altwelt:p100001:kunde.de",
+      "site": "kunde.de",
+      "kunde": {
+        "kundeNr": "10001",
+        "firma": "Beispiel GmbH"
+      },
+      "vertrag": {
+        "aktiv": true,
+        "bisIso": null
+      },
+      "stufe": "standard",
+      "stufeQuelle": "collmex",
+      "bestaetigt": false,
+      "merker": {},
+      "welt": "altwelt",
+      "server": "r1001",
+      "account": "p100001",
+      "pfad": null,
+      "domains": [
+        "kunde.de"
+      ],
+      "ausgeliefert": false,
+      "cms": null,
+      "version": null,
+      "php": null,
+      "mysites": null,
+      "backup": null,
+      "erstmalsIso": "2026-06-01T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 0,
+      "befunde": 0,
+      "aeltesteLiegezeitTage": 0,
+      "ampel": "grau",
+      "grund": "von innen noch nicht geprüft (Teil 2)"
+    },
+    {
+      "id": "mstudio:p-test01:/html",
+      "site": "kunde.de",
+      "kunde": {
+        "kundeNr": "10001",
+        "firma": "Beispiel GmbH"
+      },
+      "vertrag": {
+        "aktiv": true,
+        "bisIso": null
+      },
+      "stufe": "standard",
+      "stufeQuelle": "collmex",
+      "bestaetigt": false,
+      "merker": {},
+      "welt": "mstudio",
+      "server": null,
+      "account": "p-test01",
+      "pfad": "/html",
+      "domains": [
+        "kunde.de",
+        "www.kunde.de"
+      ],
+      "ausgeliefert": true,
+      "cms": "joomla",
+      "version": "5.4.8",
+      "php": "8.3.12",
+      "mysites": {
+        "verbunden": true,
+        "letztesAuditIso": "2026-10-24T09:00:00.000Z"
+      },
+      "backup": {
+        "letztesOkIso": "2026-10-24T03:00:00.000Z",
+        "ziel": "Storage Box"
+      },
+      "erstmalsIso": "2026-06-01T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 2,
+      "befunde": 1,
+      "aeltesteLiegezeitTage": 9,
+      "ampel": "rot",
+      "grund": "Hack-Verdacht (mySites-Audit)"
+    },
+    {
+      "id": "mstudio:p-test02:/html",
+      "site": "muster-shop.de",
+      "kunde": {
+        "kundeNr": "10002",
+        "firma": "Muster AG"
+      },
+      "vertrag": {
+        "aktiv": true,
+        "bisIso": null
+      },
+      "stufe": "premium",
+      "stufeQuelle": "abo-text",
+      "bestaetigt": false,
+      "merker": {
+        "vip": true
+      },
+      "welt": "mstudio",
+      "server": null,
+      "account": "p-test02",
+      "pfad": "/html",
+      "domains": [
+        "muster-shop.de",
+        "www.muster-shop.de"
+      ],
+      "ausgeliefert": true,
+      "cms": "wordpress",
+      "version": "6.8.3",
+      "php": "8.2.29",
+      "mysites": {
+        "verbunden": true,
+        "letztesAuditIso": "2026-10-24T09:00:00.000Z"
+      },
+      "backup": {
+        "letztesOkIso": "2026-10-24T03:00:00.000Z",
+        "ziel": "Storage Box"
+      },
+      "erstmalsIso": "2026-06-01T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 1,
+      "befunde": 1,
+      "aeltesteLiegezeitTage": 3,
+      "ampel": "rot",
+      "grund": "Backup überfällig bei 5 Sites"
+    },
+    {
+      "id": "unbekannt:neu-site.de",
+      "site": "neu-site.de",
+      "kunde": null,
+      "vertrag": null,
+      "stufe": "neu",
+      "stufeQuelle": "automatisch",
+      "bestaetigt": false,
+      "merker": {},
+      "welt": "unbekannt",
+      "server": null,
+      "account": null,
+      "pfad": null,
+      "domains": [
+        "neu-site.de"
+      ],
+      "ausgeliefert": null,
+      "cms": null,
+      "version": null,
+      "php": null,
+      "mysites": null,
+      "backup": null,
+      "erstmalsIso": "2026-10-21T12:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 0,
+      "befunde": 1,
+      "aeltesteLiegezeitTage": 3,
+      "ampel": "gelb",
+      "grund": "Neu, nicht zugeordnet"
+    },
+    {
+      "id": "mstudio:p-test07:/html",
+      "site": "ohne-mysites.de",
+      "kunde": {
+        "kundeNr": "10006",
+        "firma": "Stichprobe GmbH"
+      },
+      "vertrag": {
+        "aktiv": true,
+        "bisIso": null
+      },
+      "stufe": "standard",
+      "stufeQuelle": "collmex",
+      "bestaetigt": false,
+      "merker": {
+        "vip": true
+      },
+      "welt": "mstudio",
+      "server": null,
+      "account": "p-test07",
+      "pfad": "/html",
+      "domains": [
+        "ohne-mysites.de",
+        "www.ohne-mysites.de"
+      ],
+      "ausgeliefert": true,
+      "cms": "joomla",
+      "version": "5.4.8",
+      "php": "8.3.12",
+      "mysites": null,
+      "backup": null,
+      "erstmalsIso": "2026-06-01T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 1,
+      "befunde": 0,
+      "aeltesteLiegezeitTage": 4,
+      "ampel": "rot",
+      "grund": "Wartungsstufe ohne mySites"
+    },
+    {
+      "id": "altwelt:p100002:test-kopie.de",
+      "site": "test-kopie.de",
+      "kunde": {
+        "kundeNr": "10003",
+        "firma": "Probe KG"
+      },
+      "vertrag": {
+        "aktiv": true,
+        "bisIso": "2027-12-31"
+      },
+      "stufe": "ohne",
+      "stufeQuelle": "automatisch",
+      "bestaetigt": false,
+      "merker": {
+        "kein_ssh_moeglich": true
+      },
+      "welt": "altwelt",
+      "server": "r1001",
+      "account": "p100002",
+      "pfad": null,
+      "domains": [
+        "test-kopie.de"
+      ],
+      "ausgeliefert": true,
+      "cms": null,
+      "version": null,
+      "php": null,
+      "mysites": null,
+      "backup": null,
+      "erstmalsIso": "2026-03-10T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 0,
+      "befunde": 1,
+      "aeltesteLiegezeitTage": 2,
+      "ampel": "grau",
+      "grund": "nicht überwacht: Testkopie, wird im November gelöscht"
+    },
+    {
+      "id": "altwelt:p100004:verwaist.de",
+      "site": "verwaist.de",
+      "kunde": null,
+      "vertrag": null,
+      "stufe": "bewusst-ohne",
+      "stufeQuelle": "jan",
+      "bestaetigt": true,
+      "merker": {},
+      "welt": "altwelt",
+      "server": "r1001",
+      "account": "p100004",
+      "pfad": null,
+      "domains": [
+        "verwaist.de"
+      ],
+      "ausgeliefert": null,
+      "cms": null,
+      "version": null,
+      "php": null,
+      "mysites": null,
+      "backup": null,
+      "erstmalsIso": "2025-05-20T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-12T08:00:00.000Z",
+      "verschwunden": true,
+      "alarme": 0,
+      "befunde": 1,
+      "aeltesteLiegezeitTage": 5,
+      "ampel": "gelb",
+      "grund": "Aufräumen: Kandidat für die Aufräum-Liste"
+    },
+    {
+      "id": "mstudio:p-test03:/html",
+      "site": "wartung-a.de",
+      "kunde": {
+        "kundeNr": "10003",
+        "firma": "Probe KG"
+      },
+      "vertrag": {
+        "aktiv": true,
+        "bisIso": null
+      },
+      "stufe": "standard",
+      "stufeQuelle": "collmex",
+      "bestaetigt": false,
+      "merker": {},
+      "welt": "mstudio",
+      "server": null,
+      "account": "p-test03",
+      "pfad": "/html",
+      "domains": [
+        "wartung-a.de",
+        "www.wartung-a.de"
+      ],
+      "ausgeliefert": true,
+      "cms": "joomla",
+      "version": "5.4.8",
+      "php": "8.3.12",
+      "mysites": {
+        "verbunden": true,
+        "letztesAuditIso": "2026-10-24T09:00:00.000Z"
+      },
+      "backup": {
+        "letztesOkIso": "2026-10-24T03:00:00.000Z",
+        "ziel": "Storage Box"
+      },
+      "erstmalsIso": "2026-06-01T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 1,
+      "befunde": 0,
+      "aeltesteLiegezeitTage": 1,
+      "ampel": "rot",
+      "grund": "Backup überfällig bei 5 Sites"
+    },
+    {
+      "id": "mstudio:p-test04:/html",
+      "site": "wartung-b.de",
+      "kunde": {
+        "kundeNr": "10004",
+        "firma": "Versuch GmbH"
+      },
+      "vertrag": {
+        "aktiv": true,
+        "bisIso": null
+      },
+      "stufe": "standard",
+      "stufeQuelle": "collmex",
+      "bestaetigt": false,
+      "merker": {},
+      "welt": "mstudio",
+      "server": null,
+      "account": "p-test04",
+      "pfad": "/html",
+      "domains": [
+        "wartung-b.de",
+        "www.wartung-b.de"
+      ],
+      "ausgeliefert": true,
+      "cms": "joomla",
+      "version": "5.4.8",
+      "php": "8.3.12",
+      "mysites": {
+        "verbunden": true,
+        "letztesAuditIso": "2026-10-24T09:00:00.000Z"
+      },
+      "backup": {
+        "letztesOkIso": "2026-10-24T03:00:00.000Z",
+        "ziel": "Storage Box"
+      },
+      "erstmalsIso": "2026-06-01T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 1,
+      "befunde": 0,
+      "aeltesteLiegezeitTage": 1,
+      "ampel": "rot",
+      "grund": "Backup überfällig bei 5 Sites"
+    },
+    {
+      "id": "mstudio:p-test05:/html",
+      "site": "wartung-c.de",
+      "kunde": {
+        "kundeNr": "10004",
+        "firma": "Versuch GmbH"
+      },
+      "vertrag": {
+        "aktiv": true,
+        "bisIso": null
+      },
+      "stufe": "standard",
+      "stufeQuelle": "collmex",
+      "bestaetigt": false,
+      "merker": {},
+      "welt": "mstudio",
+      "server": null,
+      "account": "p-test05",
+      "pfad": "/html",
+      "domains": [
+        "wartung-c.de",
+        "www.wartung-c.de"
+      ],
+      "ausgeliefert": true,
+      "cms": "joomla",
+      "version": "5.4.8",
+      "php": "8.3.12",
+      "mysites": {
+        "verbunden": true,
+        "letztesAuditIso": "2026-10-24T09:00:00.000Z"
+      },
+      "backup": {
+        "letztesOkIso": "2026-10-24T03:00:00.000Z",
+        "ziel": "Storage Box"
+      },
+      "erstmalsIso": "2026-06-01T08:00:00.000Z",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z",
+      "verschwunden": false,
+      "alarme": 1,
+      "befunde": 0,
+      "aeltesteLiegezeitTage": 1,
+      "ampel": "rot",
+      "grund": "Backup überfällig bei 5 Sites"
+    }
+  ],
+  "abdeckung": {
+    "neu": [
+      {
+        "site": "neu-site.de",
+        "seitIso": "2026-10-21T12:00:00.000Z",
+        "installationen": 1,
+        "welten": [
+          "unbekannt"
+        ]
+      }
+    ],
+    "ohneMysites": [
+      {
+        "site": "ohne-mysites.de",
+        "stufe": "standard",
+        "text": "Stufe standard (VIP), aber die Site steht nicht in mySites: Audits, Backups und Updates laufen dort nicht.",
+        "seitIso": "2026-10-20T07:00:00.000Z",
+        "vip": true
+      }
+    ],
+    "premiumUnbestaetigt": [
+      {
+        "site": "muster-shop.de",
+        "kunde": {
+          "kundeNr": "10002",
+          "firma": "Muster AG"
+        }
+      }
+    ],
+    "widersprueche": [
+      {
+        "site": "alt-vertrag.de",
+        "typ": "I4",
+        "titel": "Wartungsvertrag ausgelaufen",
+        "text": "Der Wartungsvertrag endete am 31.03.2025, die Site wird bei uns weiter gehostet und antwortet mit HTTP 200. Vertrag erneuern oder Stufe ändern.",
+        "seitIso": "2026-10-22T07:00:00.000Z"
+      },
+      {
+        "site": "test-kopie.de",
+        "typ": "I9",
+        "titel": "Aktiver Vertrag, aber nicht überwacht",
+        "text": "Für die Site läuft ein Wartungsvertrag, sie steht aber seit 01.09.2026 auf „nicht überwacht“ (Testkopie, wird im November gelöscht). Vertrag oder Einordnung klären.",
+        "seitIso": "2026-10-22T07:00:00.000Z"
+      }
+    ]
+  },
+  "nichtUeberwacht": [
+    {
+      "site": "test-kopie.de",
+      "grund": "Testkopie, wird im November gelöscht",
+      "seitIso": "2026-09-01T08:00:00.000Z",
+      "durch": "jan",
+      "durchsichtIso": null
+    }
+  ],
+  "aufraeumen": [
+    {
+      "installation": "altwelt:p100003:intern-dev.de",
+      "site": "intern-dev.de",
+      "welt": "altwelt",
+      "account": "p100003",
+      "server": "r1002",
+      "pfad": "/dev",
+      "grund": "intern",
+      "zuletztGesehenIso": "2026-10-24T11:10:00.000Z"
+    },
+    {
+      "installation": "altwelt:p100004:verwaist.de",
+      "site": "verwaist.de",
+      "welt": "altwelt",
+      "account": "p100004",
+      "server": "r1001",
+      "pfad": null,
+      "grund": "verschwunden",
+      "zuletztGesehenIso": "2026-10-12T08:00:00.000Z"
+    }
+  ],
+  "waechter": {
+    "runden": [
+      {
+        "id": 4,
+        "gestartetIso": "2026-10-24T11:05:00.000Z",
+        "beendetIso": "2026-10-24T11:12:00.000Z",
+        "sites": 9,
+        "befundeNeu": 0,
+        "befundeOffen": 12,
+        "ausgefalleneQuellen": [
+          "collmex"
+        ]
+      },
+      {
+        "id": 3,
+        "gestartetIso": "2026-10-24T10:05:00.000Z",
+        "beendetIso": "2026-10-24T10:12:00.000Z",
+        "sites": 9,
+        "befundeNeu": 1,
+        "befundeOffen": 11,
+        "ausgefalleneQuellen": [
+          "collmex"
+        ]
+      },
+      {
+        "id": 2,
+        "gestartetIso": "2026-10-24T09:05:00.000Z",
+        "beendetIso": "2026-10-24T09:12:00.000Z",
+        "sites": 9,
+        "befundeNeu": 0,
+        "befundeOffen": 10,
+        "ausgefalleneQuellen": []
+      },
+      {
+        "id": 1,
+        "gestartetIso": "2026-10-24T08:05:00.000Z",
+        "beendetIso": "2026-10-24T08:12:00.000Z",
+        "sites": 9,
+        "befundeNeu": 0,
+        "befundeOffen": 10,
+        "ausgefalleneQuellen": []
+      }
+    ],
+    "quellen": [
+      {
+        "quelle": "mysites-liste",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "mittwald-liste",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "mysites",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "mittwald",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "http",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "dns",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "weiterleitung",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "inventar-listen",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "mittwald-apps",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "collmex",
+        "ok": false,
+        "grund": "Stichtag 20260701: Collmex: HTTP 500",
+        "dauerMs": 120,
+        "ausfallserie": 2
+      }
+    ]
+  },
+  "kennzahlen": {
+    "installationen": 12,
+    "welt.mstudio": 7,
+    "welt.altwelt": 4,
+    "welt.domainfactory": 0,
+    "welt.cyon": 0,
+    "welt.raidboxes": 0,
+    "welt.extern": 0,
+    "welt.unbekannt": 1,
+    "stufe.premium": 1,
+    "stufe.standard": 6,
+    "stufe.ohne": 2,
+    "stufe.bewusst-ohne": 1,
+    "stufe.intern": 1,
+    "stufe.neu": 1,
+    "sites": 11,
+    "premiumUnbestaetigt": 1,
+    "nichtUeberwacht": 1,
+    "neu": 1,
+    "ohneMysites": 1,
+    "alarmeOffen": 3,
+    "befundeOffen": 7,
+    "aeltesteLiegezeitTage": 9
+  }
+}
