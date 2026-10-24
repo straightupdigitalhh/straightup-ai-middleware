@@ -137,10 +137,13 @@ scheduler.register(erstelleKommentarAutomation(teamboardErledigenDienst));
 scheduler.register(erstelleLaufAufraeumAutomation(scheduler));
 
 // ─── Sicherheitsplattform (Teil 1) ───────────────────────────────
-// Speicher (Stand, Kennzahlen, Aufträge) in derselben Datenbank. Zwei Router
-// teilen sich diese Abhängigkeiten, hängen aber an verschiedenen Stellen der
-// App (siehe unten). Fehlt SICHERHEIT_DIENSTSCHLUESSEL oder SICHERHEIT_NUTZER,
-// antwortet jeder Pfad unter /api/sicherheit mit 503.
+// Speicher (Stand, Kennzahlen, Aufträge) und zweiter Faktor in derselben
+// Datenbank. Vier Router hängen an verschiedenen Stellen der App (siehe unten):
+// die Dienst-Endpunkte des Wachdienstes vor der /api-Auth, die
+// Nutzer-Endpunkte dahinter (beide mit diesen Abhängigkeiten), dazu die Seiten
+// /sicherheit/zweiter-faktor und /sicherheit mit der Session-Auth der Seiten.
+// Fehlt SICHERHEIT_DIENSTSCHLUESSEL oder SICHERHEIT_NUTZER, antwortet jeder
+// Pfad unter /api/sicherheit mit 503, die beiden Seiten auch.
 
 const sicherheitKonfig = leseSicherheitKonfig(process.env);
 const zweiterFaktor = new ZweiterFaktorStore(db);
