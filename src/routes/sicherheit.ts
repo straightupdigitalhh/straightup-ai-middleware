@@ -249,13 +249,17 @@ function nurNutzer(deps: SicherheitDeps): RequestHandler {
 }
 
 /**
- * Ist der Origin-Header der Anfrage die eigene Origin? Eigene Origin heißt
- * Schema und Host dieser Anfrage; hinter dem Proxy kommt der öffentliche Host
- * als Host oder als X-Forwarded-Host an, das Schema aus req.protocol (trust
- * proxy). Ein fehlender, fremder oder "null"-Origin zählt nicht. Ein
+ * Kommt die Anfrage von der eigenen Seite? Ja, wenn der Browser es mit
+ * `Sec-Fetch-Site: same-origin` selbst sagt: Damit hängt das Absenden nicht
+ * daran, dass der Ingress `X-Forwarded-Proto` setzt. Sonst muss der
+ * Origin-Header die eigene Origin sein: Schema und Host dieser Anfrage; hinter
+ * dem Proxy kommt der öffentliche Host als Host oder als X-Forwarded-Host an,
+ * das Schema aus req.protocol (trust proxy). Ein fehlender, fremder oder
+ * "null"-Origin zählt nicht, `same-site` und `cross-site` auch nicht. Ein
  * Browser-Aufruf von fremder Seite kann diese Header nicht fälschen.
  */
 export function istEigeneOrigin(req: Request): boolean {
+  if (req.get('sec-fetch-site') === 'same-origin') return true;
   const gegeben = req.get('origin');
   if (!gegeben) return false;
   const hosts = [req.get('host'), req.get('x-forwarded-host')?.split(',')[0].trim()];
@@ -684,7 +688,7 @@ export function createSicherheitZweiterFaktorRouter(deps: ZweiterFaktorDeps): Ro
     const geheimnis = zustand.geheimnis ?? zustand.entwurf;
     if (geheimnis === null) {
       // Die Seite legt dieser Session dabei einen neuen Schlüssel an und zeigt ihn.
-      abweisen(400, 'Zu dieser Anmeldung gab es noch keinen Schlüssel, oder ein anderer Aufruf hat ihn ersetzt. Unten steht ein neuer. Lege zuerst den Eintrag in der App an und gib dann den Code ein.');
+      abweisen(400, 'Zu dieser Anmeldung gab es noch keinen Schlüssel, oder ein anderer Aufruf hat ihn ersetzt. Oben steht ein neuer. Lege zuerst den Eintrag in der App an und gib dann den Code ein.');
       return;
     }
 
@@ -699,7 +703,7 @@ export function createSicherheitZweiterFaktorRouter(deps: ZweiterFaktorDeps): Ro
       abweisen(401, 'Der Code stimmt nicht oder wurde schon verwendet. Bitte warte, bis die App einen neuen Code zeigt, und versuche es dann noch einmal.');
       return;
     }
-    console.log(`🛡️ Sicherheit: zweiter Faktor ${einrichten ? 'eingerichtet' : 'bestätigt'} für ${user.email}`);
+    console.log(`🛡️ Sicherheit: zweiter Faktor ${einrichten ? 'eingerichtet' : 'bestätigt'} für ${user.email} von ${ip}`);
     res.redirect(303, NACH_BESTAETIGUNG);
   });
 

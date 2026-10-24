@@ -692,6 +692,25 @@ describe('Aufträge: Herkunft', () => {
     // Fremder Host bleibt fremd
     expect((await senden({ Host: 'oeffentlich.example.test', 'X-Forwarded-Proto': 'https', Origin: 'https://boese.example.test' })).status).toBe(400);
   });
+
+  it('sec_fetch_site_same_origin_gilt: der Browser sagt selbst, dass die Anfrage von dieser Seite kommt, auch wenn der Ingress kein X-Forwarded-Proto setzt; cross-site bleibt fremd', async () => {
+    const { app, anmelden, speicher } = await makeApp({ trustProxy: true });
+    await dienst(app).stand(BEISPIEL);
+    const cookie = anmelden(JAN);
+    const senden = (kopf: Record<string, string>) =>
+      request(app).post('/api/sicherheit/auftraege').set('Cookie', cookie).set(kopf).send(auftrag);
+
+    // Ohne X-Forwarded-Proto hält die App die Anfrage für http, die Origin sagt https: allein daran scheiterte das Absenden.
+    expect((await senden({ Host: 'oeffentlich.example.test', Origin: 'https://oeffentlich.example.test' })).status).toBe(400);
+    expect((await senden({ Host: 'oeffentlich.example.test', Origin: 'https://oeffentlich.example.test', 'Sec-Fetch-Site': 'same-origin' })).status).toBe(200);
+    // Fremde Seiten bleiben fremd, auch mit Sec-Fetch-Site same-site oder cross-site
+    for (const sfs of ['cross-site', 'same-site', 'none']) {
+      const res = await senden({ Host: 'oeffentlich.example.test', Origin: 'https://boese.example.test', 'Sec-Fetch-Site': sfs });
+      expect(res.status, sfs).toBe(400);
+      expect(res.body.error).toBe('fremde_origin');
+    }
+    expect(speicher.verlauf()).toHaveLength(1);
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════

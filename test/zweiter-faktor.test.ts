@@ -267,6 +267,8 @@ describe('Einrichten', () => {
     const alt = await eingabe(app, s1.cookie, totpCode(k1, START.getTime()), { kopf: von('203.0.113.7') });
     expect(alt.status).toBe(400);
     expect(alt.text).toContain('Lege zuerst den Eintrag in der App an');
+    expect(alt.text).toContain('Oben steht ein neuer.'); // der neue Schlüssel steht über der Meldung
+    expect(alt.text).not.toContain('Unten steht');
     const k3 = geheimnisAusSeite(alt.text);
     expect([k3 === k1, k3 === k2]).toEqual([false, false]);
     expect(nutzerZeile(db, JAN)).toMatchObject({ totp_geheimnis: null, totp_entwurf: k3 });
@@ -853,6 +855,19 @@ describe('Zugang zur Seite', () => {
     expect((await senden({ Host: 'intern:3500', 'X-Forwarded-Host': 'oeffentlich.example.test', 'X-Forwarded-Proto': 'https', Origin: 'https://oeffentlich.example.test' }, richtig)).status).toBe(303);
   });
 
+  it('sec_fetch_site_same_origin_beim_code: gilt als eigene Herkunft, auch wenn der Ingress kein X-Forwarded-Proto setzt; cross-site bleibt fremd', async () => {
+    const ctx = await makeApp({ trustProxy: true });
+    const s = ctx.mitFaktor(JAN);
+    const senden = (kopf: Record<string, string>, code: string) =>
+      request(ctx.app).post(ZWEITER_FAKTOR_PFAD).set('Cookie', s.cookie).set(kopf).type('form').send({ code });
+    const richtig = ctx.code(GEHEIMNIS_JAN);
+    expect((await senden({ Host: 'oeffentlich.example.test', Origin: 'https://oeffentlich.example.test' }, richtig)).status).toBe(400);
+    expect((await senden({ Host: 'oeffentlich.example.test', Origin: 'https://boese.example.test', 'Sec-Fetch-Site': 'cross-site' }, richtig)).status).toBe(400);
+    expect((await api(ctx.app, s.cookie)).status).toBe(403); // nichts davon hat etwas geöffnet
+    expect((await senden({ Host: 'oeffentlich.example.test', Origin: 'https://oeffentlich.example.test', 'Sec-Fetch-Site': 'same-origin' }, richtig)).status).toBe(303);
+    expect((await api(ctx.app, s.cookie)).status).toBe(200);
+  });
+
   const fehlend: [string, Aufbau][] = [
     ['ohne Dienstschlüssel', { dienstSchluessel: undefined }],
     ['mit leerem Dienstschlüssel', { dienstSchluessel: '   ' }],
@@ -1039,16 +1054,16 @@ describe('Log', () => {
     expect(log.match(/falscher Code für/g)).toHaveLength(5); // der sechste Versuch war gesperrt, kein weiterer Fehlversuch
   });
 
-  it('erfolge_stehen_im_log: eingerichtet und bestätigt, mit Konto', async () => {
-    const ctx = await makeApp();
+  it('erfolge_stehen_im_log: eingerichtet und bestätigt, mit Konto und IP', async () => {
+    const ctx = await makeApp({ trustProxy: true });
     const s = ctx.mitEntwurf(JAN);
-    await eingabe(ctx.app, s.cookie, ctx.code(GEHEIMNIS_JAN));
+    await eingabe(ctx.app, s.cookie, ctx.code(GEHEIMNIS_JAN), { kopf: { 'X-Forwarded-For': '203.0.113.7' } });
     ctx.weiter(SCHRITT);
     const b = ctx.anmelden(JAN);
-    await eingabe(ctx.app, b.cookie, ctx.code(GEHEIMNIS_JAN));
+    await eingabe(ctx.app, b.cookie, ctx.code(GEHEIMNIS_JAN), { kopf: { 'X-Forwarded-For': '198.51.100.9' } });
     const log = protokoll.join('\n');
-    expect(log).toContain('zweiter Faktor eingerichtet für jan@example.test');
-    expect(log).toContain('zweiter Faktor bestätigt für jan@example.test');
+    expect(log).toContain('zweiter Faktor eingerichtet für jan@example.test von 203.0.113.7');
+    expect(log).toContain('zweiter Faktor bestätigt für jan@example.test von 198.51.100.9');
   });
 
   it('geheimnis_code_und_token_stehen_nie_im_log: weder Schlüssel (auch in Vierergruppen) noch die gesendeten Codes noch Session-Token', async () => {
