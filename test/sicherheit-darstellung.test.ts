@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import {
   DARSTELLUNG_FUNKTIONEN,
+  aktuellesAlter,
   ampelRang,
   ampelText,
   apiFehlerText,
@@ -21,9 +22,11 @@ import {
   merkerText,
   mysitesText,
   quelleText,
+  rueckfrageText,
   siteFuerHost,
   siteText,
   standAlterText,
+  standNeuLaden,
   stufeText,
   tagText,
   urteileFuerLage,
@@ -78,6 +81,34 @@ describe('standAlterText', () => {
     for (const wert of [null, undefined, Number.NaN, -1, '5', Infinity]) {
       expect(standAlterText(wert), String(wert)).toEqual({ text: 'Noch kein Stand empfangen', rot: true });
     }
+  });
+});
+
+describe('Alter in der Kopfzeile und Nachladen', () => {
+  const GELADEN = Date.parse('2026-10-24T12:00:00.000Z');
+  const MINUTE = 60_000;
+
+  it('alter_aus_dem_empfangenen_stand: alterMinuten der Antwort plus die Zeit seit dem Abruf; ein neuer Abruf setzt es zurück', () => {
+    expect(aktuellesAlter(3, GELADEN, GELADEN)).toBe(3);
+    expect(aktuellesAlter(3, GELADEN, GELADEN + 5 * MINUTE)).toBe(8);
+    // ein offener Reiter wird zur richtigen Zeit rot …
+    expect(standAlterText(aktuellesAlter(119, GELADEN, GELADEN + 59_999)).rot).toBe(false);
+    expect(standAlterText(aktuellesAlter(119, GELADEN, GELADEN + MINUTE)).rot).toBe(true);
+    // … und ein frischer Abruf (neue Antwort, neue Abrufzeit) zeigt wieder das Alter des neuen Stands
+    expect(standAlterText(aktuellesAlter(2, GELADEN + MINUTE, GELADEN + MINUTE))).toEqual({ text: 'Stand vor 2 Minuten empfangen', rot: false });
+  });
+
+  it('eine zurückgestellte Uhr zieht nichts ab; ohne lesbares Alter null (dann „Noch kein Stand empfangen")', () => {
+    expect(aktuellesAlter(3, GELADEN, GELADEN - 10 * MINUTE)).toBe(3);
+    for (const wert of [null, undefined, Number.NaN, -1, '3']) expect(aktuellesAlter(wert, GELADEN, GELADEN + MINUTE), String(wert)).toBeNull();
+    expect(standAlterText(aktuellesAlter(null, GELADEN, GELADEN))).toEqual({ text: 'Noch kein Stand empfangen', rot: true });
+  });
+
+  it('stand_alle_5_minuten_nur_sichtbar: nachladen nur bei sichtbarem Reiter und frühestens 5 Minuten nach dem letzten Versuch', () => {
+    expect(standNeuLaden(true, GELADEN, GELADEN + 5 * MINUTE - 1)).toBe(false);
+    expect(standNeuLaden(true, GELADEN, GELADEN + 5 * MINUTE)).toBe(true);
+    expect(standNeuLaden(false, GELADEN, GELADEN + 60 * MINUTE)).toBe(false);
+    expect(standNeuLaden(true, 0, GELADEN)).toBe(true); // noch nie versucht
   });
 });
 
@@ -287,15 +318,38 @@ describe('Sites und Einträge', () => {
 // ═════════════════════════════════════════════════════════════════
 
 describe('Urteile in der Lage', () => {
-  it('eine Site bekommt alle vier Urteile, Sammel- und Quellenzeilen nur erledigt und stumm', () => {
-    expect(urteileFuerLage(zeile(3))).toEqual(['erledigt', 'stumm', 'stimmt', 'kein-hack']);
+  const HACK_TYPEN = ['A1', 'A2', 'B6a', 'B6b', 'B6c'];
+  const ANDERE_TYPEN = ['A3', 'A5', 'A6', 'A7', 'B1', 'B3', 'B4', 'B7', 'B8', 'I1', 'I2', 'I4', 'I6', 'I8', 'I9'];
+
+  it('kein_hack_nur_bei_hack_typen: „kein Hack" nur bei A1, A2 und B6a bis B6c (Hack-Verdacht, Cloaking, veränderte Startseite)', () => {
+    for (const typ of HACK_TYPEN) expect(urteileFuerLage({ ...zeile(3), typ }), typ).toEqual(['erledigt', 'stumm', 'stimmt', 'kein-hack']);
+    for (const typ of ANDERE_TYPEN) expect(urteileFuerLage({ ...zeile(3), typ }), typ).toEqual(['erledigt', 'stumm', 'stimmt']);
+    // im Beispiel-Stand trägt nur der Hack-Verdacht (A1) das Urteil
+    expect(LAGE.filter((z) => urteileFuerLage(z).includes('kein-hack')).map((z) => z.typ)).toEqual(['A1']);
+  });
+
+  it('stimmt_auf_jeder_einzelnen_zeile: jede Zeile einer Site bekommt „stimmt", Sammel- und Quellenzeilen nur erledigt und stumm', () => {
+    for (const z of LAGE.filter((x) => !x.site.startsWith('_'))) expect(urteileFuerLage(z), `${z.befundId}`).toContain('stimmt');
     expect(urteileFuerLage(zeile(10))).toEqual(['erledigt', 'stumm']);
+    expect(urteileFuerLage({ ...zeile(10), typ: 'B6c' })).toEqual(['erledigt', 'stumm']); // auch ein Sammel-B6 ohne „kein Hack"
     expect(urteileFuerLage({ ...zeile(10), site: '_quelle:collmex', typ: 'A9' })).toEqual(['erledigt', 'stumm']);
   });
 
   it('ein Sammel-A7 nur stumm: der Kern übernimmt DNS nur je Site', () => {
     expect(urteileFuerLage({ ...zeile(10), typ: 'A7' })).toEqual(['stumm']);
-    expect(urteileFuerLage({ ...zeile(3), typ: 'A7' })).toEqual(['erledigt', 'stumm', 'stimmt', 'kein-hack']);
+    expect(urteileFuerLage({ ...zeile(3), typ: 'A7' })).toEqual(['erledigt', 'stumm', 'stimmt']);
+  });
+
+  it('rueckfrageText nennt, was passiert: „kein Hack" schließt den Eintrag mit dem Urteil, „aufgeräumt" entfernt die verschwundenen Installationen', () => {
+    expect(rueckfrageText('kein-hack', zeile(3)))
+      .toBe('Der Alarm „Hack-Verdacht (mySites-Audit)“ bei kunde.de wird mit dem Urteil „kein Hack“ geschlossen.');
+    expect(rueckfrageText('kein-hack', { ...zeile(2), typ: 'B6c', titel: 'Startseite deutlich verändert' }))
+      .toBe('Der Befund „Startseite deutlich verändert“ bei kunde.de wird mit dem Urteil „kein Hack“ geschlossen.');
+    expect(rueckfrageText('aufgeraeumt', zeile(4)))
+      .toBe('Die verschwundenen Installationen von verwaist.de werden aus dem Inventar entfernt. Auf den Servern wird nichts gelöscht.');
+    expect(rueckfrageText('aufgeraeumt', { ...zeile(4), site: '_alle', mitglieder: ['weg-a.de', 'weg-b.de'] }))
+      .toBe('Die verschwundenen Installationen der 2 Sites dieses Sammelbefunds werden aus dem Inventar entfernt. Auf den Servern wird nichts gelöscht.');
+    expect(rueckfrageText('erledigt', zeile(3))).toBe('');
   });
 
   it('auftragFuerLage baut genau die Formen, die die API annimmt', () => {
@@ -417,7 +471,8 @@ describe('flottePasst', () => {
 describe('Einbettung ins Skript der Seite', () => {
   it('alle Funktionen sind eingebettet', () => {
     const namen = DARSTELLUNG_FUNKTIONEN.map((f) => f.name);
-    for (const f of [ampelText, liegezeitText, standAlterText, kopfSatz, waechterText, auftragNachVerlauf, verlaufAnfrage, flottePasst]) {
+    for (const f of [ampelText, liegezeitText, standAlterText, kopfSatz, waechterText, auftragNachVerlauf, verlaufAnfrage, flottePasst,
+      urteileFuerLage, rueckfrageText, aktuellesAlter, standNeuLaden]) {
       expect(namen).toContain(f.name);
     }
     expect(new Set(namen).size).toBe(namen.length);

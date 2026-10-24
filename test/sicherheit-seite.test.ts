@@ -255,6 +255,46 @@ describe('Die Seite /sicherheit', () => {
     expect(imSkript.waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen)).toEqual(waechterText(BEISPIEL.runde, BEISPIEL.waechter.quellen));
   });
 
+  /** Die reinen Funktionen so, wie sie im ausgelieferten Skript stehen. */
+  function ausDemSkript(html: string): Record<string, (...a: unknown[]) => any> {
+    const namen = DARSTELLUNG_FUNKTIONEN.map((f) => f.name);
+    // eslint-disable-next-line no-new-func
+    return new Function(`${skript(html, 'darstellung')}\nreturn { ${namen.join(', ')} };`)();
+  }
+
+  it('urteile_im_ausgelieferten_skript: „kein Hack" nur bei A1, A2 und B6a bis B6c, „stimmt" auf jeder einzelnen Zeile, Rückfrage vor „kein Hack" und „aufgeräumt"', async () => {
+    const { res } = await bestaetigteSeite();
+    const imSkript = ausDemSkript(res.text);
+    const vorbild = BEISPIEL.lage.find((z: any) => z.typ === 'A1');
+    for (const typ of ['A1', 'A2', 'A3', 'A5', 'A6', 'A7', 'B1', 'B4', 'B6a', 'B6b', 'B6c', 'I1', 'I2', 'I4', 'I6', 'I9']) {
+      const urteile: string[] = imSkript.urteileFuerLage({ ...vorbild, typ });
+      expect(urteile, typ).toContain('stimmt');
+      expect(urteile.includes('kein-hack'), typ).toBe(['A1', 'A2', 'B6a', 'B6b', 'B6c'].includes(typ));
+    }
+    for (const z of BEISPIEL.lage) {
+      const urteile: string[] = imSkript.urteileFuerLage(z);
+      expect(urteile.includes('stimmt'), `${z.befundId}`).toBe(!z.site.startsWith('_'));
+    }
+    expect(imSkript.urteileFuerLage({ ...vorbild, site: '_alle', typ: 'B6c' })).toEqual(['erledigt', 'stumm']);
+    // Das Skript baut die Knöpfe aus urteileFuerLage und fragt vor „kein Hack" und „aufgeräumt" einmal nach.
+    const client = skript(res.text, null);
+    expect(client).toContain('urteileFuerLage(z)');
+    expect(client).toContain("rueckfrageText('kein-hack', z)");
+    expect(client).toContain("rueckfrageText('aufgeraeumt', i6)");
+    expect(imSkript.rueckfrageText('kein-hack', vorbild)).toContain('mit dem Urteil „kein Hack“ geschlossen');
+  });
+
+  it('stand_alle_5_minuten_nur_sichtbar: das Skript lädt den Stand nach, solange der Reiter sichtbar ist, und sofort, wenn er wieder sichtbar wird; das Alter rechnet ab dem Abruf', async () => {
+    const { res } = await bestaetigteSeite();
+    const client = skript(res.text, null);
+    expect(client).toContain("standNeuLaden(document.visibilityState === 'visible', st.versuchtMs, Date.now())");
+    expect(client).toMatch(/addEventListener\('visibilitychange'/);
+    expect(client).toContain('aktuellesAlter(st.antwort.alterMinuten, st.geladenMs, Date.now())');
+    const imSkript = ausDemSkript(res.text);
+    expect(imSkript.standNeuLaden(false, 0, Date.now())).toBe(false);
+    expect(imSkript.aktuellesAlter(3, 0, 5 * 60_000)).toBe(8);
+  });
+
   it('mit der Session der Seite liefert die API den Stand, den die Seite rendert', async () => {
     const { app, cookie } = await bestaetigteSeite();
     const api = await request(app).get('/api/sicherheit/stand').set('Cookie', cookie);

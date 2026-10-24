@@ -154,6 +154,7 @@ input.sl-eingabe[type="search"], input.sl-eingabe[type="text"] { width: min(100%
 .sl-form { display: grid; gap: 10px; font-size: .85rem; }
 .sl-form-zeile { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .sl-form-zeile > .sl-name { color: var(--fg-muted); min-width: 6.5rem; }
+.sl-rueckfrage { border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--line)); background: color-mix(in srgb, var(--warn) 8%, var(--bg)); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; font-size: .8rem; max-width: 48ch; cursor: default; }
 `;
 
 /** Die Seite ohne Daten; alles Weitere holt ihr Skript. */
@@ -326,10 +327,10 @@ function skript(zweiterFaktorPfad: string): string {
   var STAND_WARTEN_MS = 2 * 60 * 1000;
 
   var st = {
-    antwort: null, geladenMs: 0, laedt: null,
+    antwort: null, geladenMs: 0, versuchtMs: 0, laedt: null,
     seite: 'lage', akte: null,
     filter: { ampel: 'alle', welt: 'alle', stufe: 'alle', suche: '' },
-    rsuche: '', sort: {}, offen: {}, eingaben: {},
+    rsuche: '', sort: {}, offen: {}, eingaben: {}, rueckfrage: null,
     auftraege: [], takt: null, standFrischAb: null, standFrist: 0
   };
 
@@ -427,6 +428,7 @@ function skript(zweiterFaktorPfad: string): string {
 
   function ladeStand() {
     if (st.laedt) return st.laedt;
+    st.versuchtMs = Date.now();
     st.laedt = holeJson('/api/sicherheit/stand').then(function (r) {
       st.laedt = null;
       if (!r.ok) {
@@ -470,6 +472,22 @@ function skript(zweiterFaktorPfad: string): string {
     var link = a.linkZiel ? linkZu(a.linkZiel) : null;
     if (link) p.append(' ', link);
     return p;
+  }
+
+  /** „kein Hack“ und „aufgeräumt“ gehen erst nach einer Rückfrage in der Zeile ab; alles andere mit einem Klick. */
+  function rueckfrageOffen(ziel, art) { return st.rueckfrage !== null && st.rueckfrage.ziel === ziel && st.rueckfrage.art === art; }
+  function frageZuerst(ziel, art) { st.rueckfrage = { ziel: ziel, art: art }; zeichne(); }
+  function rueckfrageBox(text, jaText, beiJa) {
+    var box = el('div', 'sl-rueckfrage');
+    box.setAttribute('role', 'group');
+    box.setAttribute('aria-label', 'Rückfrage');
+    var knoepfe = el('div', 'sl-aktionen');
+    knoepfe.append(
+      knopf(jaText, function () { st.rueckfrage = null; beiJa(); zeichne(); }),
+      knopf('Abbrechen', function () { st.rueckfrage = null; zeichne(); })
+    );
+    box.append(el('p', null, text), knoepfe);
+    return box;
   }
 
   /** Schickt einen Auftrag. Bis die Quittung des Kerns da ist, steht am Ziel „wird übernommen“. */
@@ -578,7 +596,7 @@ function skript(zweiterFaktorPfad: string): string {
       return;
     }
     kern.textContent = kopfSatz(s.kennzahlen);
-    var a = standAlterText(st.antwort.alterMinuten + (Date.now() - st.geladenMs) / 60000);
+    var a = standAlterText(aktuellesAlter(st.antwort.alterMinuten, st.geladenMs, Date.now()));
     alter.textContent = a.text + ' (' + zeitText(st.antwort.empfangenIso) + ')' + (a.rot ? '. Der Kern schickt sonst alle fünf Minuten einen neuen.' : '.');
     alter.className = a.rot ? 'sl-rot' : '';
     var w = waechterText(s.runde, s.waechter ? s.waechter.quellen : []);
@@ -671,7 +689,7 @@ function skript(zweiterFaktorPfad: string): string {
         tr.tabIndex = 0;
         if (opt.gewaehlt && opt.gewaehlt(r)) tr.setAttribute('aria-selected', 'true');
         tr.addEventListener('click', function (e) {
-          if (e.target.closest && e.target.closest('button, input, select, a, label')) return;
+          if (e.target.closest && e.target.closest('button, input, select, a, label, .sl-rueckfrage')) return;
           opt.klick(r);
         });
         tr.addEventListener('keydown', function (e) {
@@ -732,6 +750,11 @@ function skript(zweiterFaktorPfad: string): string {
   /** Die Urteile einer Zeile der Lage; Sammel- und Quellenzeilen nur erledigt und stumm (urteileFuerLage). */
   function urteile(z) {
     var ziel = 'lage:' + z.befundId;
+    if (rueckfrageOffen(ziel, 'kein-hack')) {
+      return mitRueck(rueckfrageBox(rueckfrageText('kein-hack', z), 'Ja, kein Hack', function () {
+        sende(auftragFuerLage(z, 'kein-hack'), ziel, URTEIL_TEXT['kein-hack'] + ': ' + siteText(z.site) + ', ' + z.typ);
+      }), ziel);
+    }
     var aus = laeuft(ziel);
     var box = el('div', 'sl-aktionen');
     urteileFuerLage(z).forEach(function (art) {
@@ -741,6 +764,8 @@ function skript(zweiterFaktorPfad: string): string {
           if (!feld.value) { pflicht(feld, 'Bitte ein Datum wählen.'); return; }
           sende(auftragFuerLage(z, 'stumm', feld.value), ziel, 'stumm bis ' + tagText(feld.value) + ': ' + siteText(z.site) + ', ' + z.typ);
         }, aus));
+      } else if (art === 'kein-hack') {
+        box.append(knopf(URTEIL_TEXT[art], function () { frageZuerst(ziel, art); }, aus));
       } else {
         box.append(knopf(URTEIL_TEXT[art], function () {
           sende(auftragFuerLage(z, art), ziel, URTEIL_TEXT[art] + ': ' + siteText(z.site) + ', ' + z.typ);
@@ -978,9 +1003,12 @@ function skript(zweiterFaktorPfad: string): string {
     var aus = laeuft(ziel);
     var box = el('div', 'sl-aktionen');
     if (z.grund === 'verschwunden') {
-      box.append(knopf('aufgeräumt', function () {
-        sende(auftragFuerLage(i6, 'erledigt'), ziel, 'aufgeräumt: ' + siteText(i6.site));
-      }, aus));
+      if (rueckfrageOffen(ziel, 'aufgeraeumt')) {
+        return mitRueck(rueckfrageBox(rueckfrageText('aufgeraeumt', i6), 'Ja, aufräumen', function () {
+          sende(auftragFuerLage(i6, 'erledigt'), ziel, 'aufgeräumt: ' + siteText(i6.site));
+        }), ziel);
+      }
+      box.append(knopf('aufgeräumt', function () { frageZuerst(ziel, 'aufgeraeumt'); }, aus));
     } else {
       var feld = datumsfeld('stumm:' + i6.befundId, inTagen(30), aus);
       box.append(feld, knopf('stumm bis', function () {
@@ -1255,6 +1283,23 @@ function skript(zweiterFaktorPfad: string): string {
 
   // ─── Start ───
 
+  /** Steht der Cursor in einem Feld, das das Neuzeichnen ersetzt (Akte, Tabellen, Auswahl der Filter)? */
+  function tipptGerade() {
+    var f = document.activeElement;
+    if (!f || !f.closest || (f.tagName !== 'INPUT' && f.tagName !== 'SELECT' && f.tagName !== 'TEXTAREA')) return false;
+    return !!f.closest('#akte-inhalt, .sl-rahmen') || (f.tagName === 'SELECT' && !!f.closest('.sl-filter'));
+  }
+  /**
+   * Alle 30 Sekunden: die Uhr der Kopfzeile, und alle fünf Minuten der Stand, solange der Reiter sichtbar ist.
+   * Wer gerade in einem Feld der Akte oder einer Tabelle tippt, verlöre beim Neuzeichnen den Cursor: dann beim nächsten Schlag.
+   */
+  function uhrschlag() {
+    zeichneKopf();
+    if (!standNeuLaden(document.visibilityState === 'visible', st.versuchtMs, Date.now())) return;
+    if (tipptGerade()) return;
+    ladeStand();
+  }
+
   function zeigeSeite(id, merken) {
     st.seite = id;
     document.querySelectorAll('.sl-tab').forEach(function (t) {
@@ -1281,7 +1326,11 @@ function skript(zweiterFaktorPfad: string): string {
     zeigeSeite(SEITEN.indexOf(anfang) >= 0 ? anfang : 'lage', false);
     document.getElementById('neu-laden').addEventListener('click', function () { ladeStand(); });
     document.getElementById('akte-zu').addEventListener('click', schliesseAkte);
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && st.akte !== null) schliesseAkte(); });
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      if (st.rueckfrage !== null) { st.rueckfrage = null; zeichne(); return; }
+      if (st.akte !== null) schliesseAkte();
+    });
     var suche = document.getElementById('f-suche');
     suche.addEventListener('input', function () { st.filter.suche = suche.value; if (stand()) zeichneFlotte(stand()); });
     var welt = document.getElementById('f-welt');
@@ -1290,8 +1339,13 @@ function skript(zweiterFaktorPfad: string): string {
     stufe.addEventListener('change', function () { st.filter.stufe = stufe.value; if (stand()) zeichneFlotte(stand()); });
     var rsuche = document.getElementById('r-suche');
     rsuche.addEventListener('input', function () { st.rsuche = rsuche.value; if (stand()) zeichneAufraeumen(stand()); });
-    // Nur die Uhr der Kopfzeile, ohne Anfrage: Das Alter des Stands bleibt richtig, auch wenn der Reiter lange offen ist.
-    setInterval(zeichneKopf, 60000);
+    // Die Uhr der Kopfzeile und das Nachladen alle fünf Minuten (nur bei sichtbarem Reiter); wird er wieder sichtbar, sofort.
+    setInterval(uhrschlag, 30000);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState !== 'visible') return;
+      zeichneKopf();
+      ladeStand();
+    });
     ladeStand();
   }
 

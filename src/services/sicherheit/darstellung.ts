@@ -135,6 +135,21 @@ export function standAlterText(alterMinuten: unknown): { text: string; rot: bool
   return { text: 'Stand ' + wann + ' empfangen', rot: m >= 120 };
 }
 
+/**
+ * Das Alter des angezeigten Stands in Minuten: `alterMinuten` aus der Antwort
+ * der API plus die Zeit seit diesem Abruf (Browser-Uhr). Ein neuer Abruf setzt
+ * es zurück. null, wenn die Antwort kein Alter trägt.
+ */
+export function aktuellesAlter(alterMinuten: unknown, geladenMs: number, jetztMs: number): number | null {
+  if (typeof alterMinuten !== 'number' || !Number.isFinite(alterMinuten) || alterMinuten < 0) return null;
+  return alterMinuten + Math.max(0, jetztMs - geladenMs) / 60000;
+}
+
+/** Ist der Stand neu zu laden? Nur bei sichtbarem Reiter und frühestens fünf Minuten nach dem letzten Versuch. */
+export function standNeuLaden(sichtbar: boolean, letzterVersuchMs: number, jetztMs: number): boolean {
+  return sichtbar && jetztMs - letzterVersuchMs >= 5 * 60 * 1000;
+}
+
 // ─── Zeiten ──────────────────────────────────────────────────────
 
 /** Ein Zeitpunkt in Berliner Zeit: 24.10.2026, 13:12. */
@@ -335,13 +350,34 @@ export function i6FuerSite(lage: LageZeile[], site: string): LageZeile | null {
 // ─── Urteile und Aufträge ────────────────────────────────────────
 
 /**
- * Die Urteile, die eine Zeile der Lage anbietet. Sammel- und Quellenzeilen
- * (`_alle`, `_quelle:<name>`) kennen nur erledigt und stumm; einen Sammel-A7
- * schließt der Kern nicht (er übernimmt DNS nur je Site), er bleibt stumm.
+ * Die Urteile, die eine Zeile der Lage anbietet. Jede Zeile einer Site: erledigt,
+ * stumm und stimmt; „kein Hack" nur, wo ein Hack in Frage steht (A1 Hack-Verdacht,
+ * A2 Cloaking, B6a bis B6c Startseite). Sammel- und Quellenzeilen (`_alle`,
+ * `_quelle:<name>`) kennen nur erledigt und stumm; einen Sammel-A7 schließt der
+ * Kern nicht (er übernimmt DNS nur je Site), er bleibt stumm.
  */
 export function urteileFuerLage(zeile: LageZeile): string[] {
   if (zeile.site.charAt(0) === '_') return zeile.typ === 'A7' ? ['stumm'] : ['erledigt', 'stumm'];
-  return ['erledigt', 'stumm', 'stimmt', 'kein-hack'];
+  if (['A1', 'A2', 'B6a', 'B6b', 'B6c'].indexOf(zeile.typ) >= 0) return ['erledigt', 'stumm', 'stimmt', 'kein-hack'];
+  return ['erledigt', 'stumm', 'stimmt'];
+}
+
+/**
+ * Die Rückfrage vor den beiden Aktionen, die nicht mit einem Klick abgehen: Sie
+ * sagt, was passiert. `zeile` ist bei „aufgeraeumt" der I6, auf den der Auftrag geht.
+ */
+export function rueckfrageText(art: string, zeile: LageZeile): string {
+  if (art === 'kein-hack') {
+    return (zeile.klasse === 'alarm' ? 'Der Alarm' : 'Der Befund') + ' „' + zeile.titel + '“ bei ' + siteText(zeile.site)
+      + ' wird mit dem Urteil „kein Hack“ geschlossen.';
+  }
+  if (art === 'aufgeraeumt') {
+    var wessen = zeile.site === '_alle'
+      ? 'der ' + zahlWort((zeile.mitglieder || []).length, 'Site', 'Sites') + ' dieses Sammelbefunds'
+      : 'von ' + zeile.site;
+    return 'Die verschwundenen Installationen ' + wessen + ' werden aus dem Inventar entfernt. Auf den Servern wird nichts gelöscht.';
+  }
+  return '';
 }
 
 /** Der Auftrag zu einem Urteil, genau in der Form, die POST /api/sicherheit/auftraege annimmt. */
@@ -426,8 +462,8 @@ export function flottePasst(zeile: FlottenZeile, filter: FlottenFilter, vertraeg
 
 /** Alles, was seite.ts ins Skript der Seite einbettet. */
 export const DARSTELLUNG_FUNKTIONEN = [
-  zahlWort, ampelText, ampelRang, liegezeitText, standAlterText, zeitText, datumText, tagText, kopfSatz, waechterText,
-  siteText, weltText, stufeName, quelleText, stufeText, merkerText, kundeText, vertragText, ausgeliefertText, mysitesText, backupText,
-  hostForm, siteFuerHost, eintraegeDerSite, i6FuerSite, urteileFuerLage, auftragFuerLage, apiFehlerText, verlaufAnfrage,
-  auftragNachVerlauf, flottePasst,
+  zahlWort, ampelText, ampelRang, liegezeitText, standAlterText, aktuellesAlter, standNeuLaden, zeitText, datumText, tagText,
+  kopfSatz, waechterText, siteText, weltText, stufeName, quelleText, stufeText, merkerText, kundeText, vertragText,
+  ausgeliefertText, mysitesText, backupText, hostForm, siteFuerHost, eintraegeDerSite, i6FuerSite, urteileFuerLage,
+  rueckfrageText, auftragFuerLage, apiFehlerText, verlaufAnfrage, auftragNachVerlauf, flottePasst,
 ];
