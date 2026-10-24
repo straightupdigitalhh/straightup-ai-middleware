@@ -73,7 +73,11 @@ Konten bleiben, wie sie sind.
 Ausführen in einer Shell des Containers `awork-middleware` (Projekt
 `p-enxfxy`), etwa über `mw container exec` wie in
 `~/agents/docs/deployment.md`. Das Image (`node:22-alpine`) hat kein
-`sqlite3`, der Befehl nutzt `node:sqlite`.
+`sqlite3`, der Befehl nutzt `node:sqlite`. Die Middleware selbst läuft als
+Nutzer `node` (der Entrypoint wechselt per `su-exec` zu ihm). Meldet `id -u`
+in der Shell `0` (root), den Befehl als `su-exec node node -e '…'`
+ausführen, damit keine Datei neben der Datenbank (`middleware.db-wal`,
+`middleware.db-shm`) root gehört.
 
 Wo die Datenbank liegt, folgt aus der Konfiguration: `src/index.ts` öffnet
 `middleware.db` in `DATA_DIR`, sonst `FEEDBACK_DATA_DIR`, sonst `./data`.
