@@ -115,6 +115,18 @@ const MIGRATIONS: string[] = [
     quittiert     TEXT
   );
   `,
+  // v6: Zweiter Faktor (TOTP) für /sicherheit (core/zweiter-faktor.ts). Je
+  // Konto das eingerichtete Geheimnis, der Entwurf, den die Einrichtung gerade
+  // zeigt, und der Zeitschritt des zuletzt angenommenen Codes (ein Code gilt
+  // nur einmal). Je Session der Zeitpunkt, bis zu dem sie als bestätigt gilt.
+  // Nur neue Spalten ohne Vorgabe: bestehende Zeilen bleiben gültig und haben
+  // NULL, also nichts eingerichtet und nichts bestätigt.
+  `
+  ALTER TABLE users ADD COLUMN totp_geheimnis TEXT;
+  ALTER TABLE users ADD COLUMN totp_entwurf TEXT;
+  ALTER TABLE users ADD COLUMN totp_letzter_schritt INTEGER;
+  ALTER TABLE sessions ADD COLUMN zweiter_faktor_bis TEXT;
+  `,
 ];
 
 export function openDb(filePath: string): DatabaseSync {

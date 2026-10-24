@@ -37,9 +37,12 @@ import { TeamboardEinstellungenStore } from './core/teamboard-einstellungen.js';
 import { TeamboardErledigungenStore } from './core/teamboard-erledigungen.js';
 import { renderSeite } from './services/teamboard/seite.js';
 import { SicherheitSpeicher } from './services/sicherheit/speicher.js';
+import { ZweiterFaktorStore } from './core/zweiter-faktor.js';
 import {
   createSicherheitDienstRouter,
   createSicherheitNutzerRouter,
+  createSicherheitZweiterFaktorRouter,
+  createZweiterFaktorPruefung,
   fehlendeSicherheitKonfig,
   leseSicherheitKonfig,
 } from './routes/sicherheit.js';
@@ -139,12 +142,13 @@ scheduler.register(erstelleLaufAufraeumAutomation(scheduler));
 // antwortet jeder Pfad unter /api/sicherheit mit 503.
 
 const sicherheitKonfig = leseSicherheitKonfig(process.env);
+const zweiterFaktor = new ZweiterFaktorStore(db);
 const sicherheitDeps = {
   speicher: new SicherheitSpeicher(db),
   ...sicherheitKonfig,
-  // Task 9 ersetzt das durch die Prüfung der Session (TOTP). Bis dahin bleibt
-  // jeder Nutzer-Endpunkt zu (403 mit Hinweis auf /sicherheit/zweiter-faktor).
-  zweiterFaktorBestaetigt: () => false,
+  // Zweiter Faktor (TOTP): eine Session gilt 12 Stunden als bestätigt, nachdem ihr Konto unter
+  // /sicherheit/zweiter-faktor einen Code eingegeben hat. Davor antworten die Nutzer-Endpunkte 403.
+  zweiterFaktorBestaetigt: createZweiterFaktorPruefung(zweiterFaktor),
 };
 const sicherheitFehlt = fehlendeSicherheitKonfig(sicherheitKonfig);
 console.log(sicherheitFehlt.length === 0
@@ -311,6 +315,15 @@ app.use(createTeamboardRouter({
 // Session eines Kontos aus SICHERHEIT_NUTZER mit bestätigtem zweiten Faktor, nie der
 // Master-Key. Die Dienst-Endpunkte des Wachdienstes hängen weiter oben vor der Auth.
 app.use(createSicherheitNutzerRouter(sicherheitDeps));
+// /sicherheit/zweiter-faktor: Schlüssel einrichten und Code eingeben, nur mit der Session eines Kontos
+// aus SICHERHEIT_NUTZER (ohne Session 302 zur Anmeldung, nie der Master-Key). Bewusst nicht unter
+// /api/sicherheit: dort verlangen die Endpunkte den zweiten Faktor schon. Wie /teamboard wird der
+// Guard dem Router übergeben und der Router ohne Pfad-Präfix gemountet (next= braucht den vollen Pfad).
+app.use(createSicherheitZweiterFaktorRouter({
+  ...sicherheitKonfig,
+  store: zweiterFaktor,
+  pageAuth: createPageAuth(sessions, '/app/'),
+}));
 
 // GET /teamboard (HTML-Seite, nur Session — kein Master-Key, das ist kein
 // API-Client). Der Guard (createPageAuth) wird dem Router als Route-

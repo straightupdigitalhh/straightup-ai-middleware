@@ -1,12 +1,17 @@
 import express, { Router, type ErrorRequestHandler, type Request, type RequestHandler, type Response } from 'express';
-import { getAuth, safeEqual } from '../services/auth.js';
+import { findeTotpSchritt, neuesTotpGeheimnis } from '../core/totp.js';
+import { SESSION_COOKIE } from '../core/sessions.js';
+import type { User } from '../core/users.js';
+import type { ZweiterFaktorStore } from '../core/zweiter-faktor.js';
+import { getAuth, parseCookies, safeEqual } from '../services/auth.js';
 import { GENERIC_ERROR_MESSAGE } from '../services/errors.js';
 import { FixedWindowLimiter } from '../services/rate-limit.js';
 import { AUFTRAG_ARTEN, type AuftragArt, type SicherheitSpeicher } from '../services/sicherheit/speicher.js';
+import { renderEingabe, renderEinrichten, renderHinweis } from '../services/sicherheit/zweiter-faktor-seite.js';
 
 // ─── API der Sicherheitsplattform (Teil 1) ───────────────────────
 //
-// Zwei Router, weil die Endpunkte zwei verschiedene Anrufer haben:
+// Drei Router, weil die Endpunkte verschiedene Anrufer haben:
 //
 //  Dienst (der Wachdienst im Agenten-Haus, Header X-Dienst-Schluessel): Stand
 //  schieben, offene Aufträge holen, Aufträge quittieren. Kennt weder Session
@@ -17,9 +22,15 @@ import { AUFTRAG_ARTEN, type AuftragArt, type SicherheitSpeicher } from '../serv
 //  Verlauf lesen. Hängt HINTER der /api-Auth: Session eines Kontos aus
 //  SICHERHEIT_NUTZER und bestätigter zweiter Faktor; der Master-Key reicht nie.
 //
+//  Zweiter Faktor (die Seite /sicherheit/zweiter-faktor im Browser): Einrichten
+//  und Code eingeben, ebenfalls nur mit der Session eines Kontos aus
+//  SICHERHEIT_NUTZER. Die Seite liegt bewusst NICHT unter /api/sicherheit/:
+//  dort verlangt nurNutzer den zweiten Faktor schon.
+//
 // Fehlt SICHERHEIT_DIENSTSCHLUESSEL oder SICHERHEIT_NUTZER, antwortet jeder
-// Pfad unter /api/sicherheit mit 503. In keinem Log stehen der Schlüssel,
-// Session-Token oder Inhalte des Stands.
+// Pfad unter /api/sicherheit mit 503, die Seite für den zweiten Faktor auch.
+// In keinem Log stehen der Schlüssel, Session-Token, Codes, Geheimnisse oder
+// Inhalte des Stands.
 
 const STAND_VERSION = 1;
 const STAND_MAX = '10mb';
@@ -28,7 +39,8 @@ const QUITTUNG_BODY_MAX = '64kb';
 const FEHLVERSUCHE_MAX = 20;
 const FEHLVERSUCHE_FENSTER_MS = 15 * 60 * 1000;
 const GRUND_MAX = 500;
-const ZWEITER_FAKTOR_PFAD = '/sicherheit/zweiter-faktor';
+/** Wo ein Konto den zweiten Faktor einrichtet und bestätigt. Wer ihn braucht, leitet hierher (302). */
+export const ZWEITER_FAKTOR_PFAD = '/sicherheit/zweiter-faktor';
 
 // ─── Konfiguration ───────────────────────────────────────────────
 
@@ -44,8 +56,8 @@ export interface SicherheitDeps extends SicherheitKonfig {
   /**
    * Ist der zweite Faktor für die Session dieser Anfrage bestätigt? Läuft
    * erst, wenn Session und Konto geprüft sind; `res.locals.auth` ist gesetzt.
-   * Task 9 liefert die echte Prüfung (TOTP); bis dahin gibt index.ts
-   * `() => false` mit, und die Nutzer-Endpunkte bleiben für alle zu.
+   * Die echte Prüfung ist `createZweiterFaktorPruefung` (TOTP, 12 Stunden je
+   * Session); Tests setzen eine eigene ein.
    */
   zweiterFaktorBestaetigt: (req: Request, res: Response) => boolean;
   /** Fehlversuche mit falschem Dienstschlüssel (Standard: 20 je 15 Minuten und IP). */
@@ -473,5 +485,184 @@ export function createSicherheitNutzerRouter(deps: SicherheitDeps): Router {
   });
 
   router.use(behandleFehler);
+  return router;
+}
+
+// ─── Zweiter Faktor: die Seite ───────────────────────────────────
+//
+// GET /sicherheit/zweiter-faktor zeigt, was das Konto braucht: solange kein
+// Geheimnis eingerichtet ist, den Schlüssel zum Abtippen in die Authenticator-App
+// (der Server erzeugt ihn und legt ihn als Entwurf ab), danach nur das Feld für
+// den Code. POST nimmt den Code. Der Browser schickt nie ein Geheimnis: ein
+// Entwurf wird erst zum Geheimnis, wenn ein Code zu ihm stimmt. Ein angenommener
+// Code bestätigt die Session für 12 Stunden (core/zweiter-faktor.ts).
+
+/** Fünf falsche Codes je Konto in 15 Minuten sperren die Eingabe bis zum Ende des Fensters. */
+const CODE_FEHLVERSUCHE_MAX = 5;
+const CODE_FEHLVERSUCHE_FENSTER_MS = 15 * 60 * 1000;
+/** Ein Formular mit einem Code ist winzig; mehr liest der Router nicht. */
+const CODE_BODY_MAX = '2kb';
+/** Wohin es nach einem angenommenen Code geht: ins Dashboard. */
+const NACH_BESTAETIGUNG = '/sicherheit';
+
+export interface ZweiterFaktorDeps extends SicherheitKonfig {
+  store: ZweiterFaktorStore;
+  /** Wie bei /teamboard: verlangt eine Session (sonst 302 zur Anmeldung) und setzt `res.locals.auth`. */
+  pageAuth: RequestHandler;
+  /** Falsche Codes je Konto (Standard: 5 je 15 Minuten). */
+  codeFehlversuche?: FixedWindowLimiter;
+  jetzt?: () => Date;
+}
+
+/**
+ * Die echte Prüfung für `SicherheitDeps.zweiterFaktorBestaetigt`: ist die
+ * Session dieser Anfrage bestätigt? Sie liest das Cookie selbst und fragt den
+ * Speicher; dass die Session gilt, hat die Auth davor geprüft.
+ */
+export function createZweiterFaktorPruefung(
+  store: ZweiterFaktorStore,
+  jetzt: () => Date = () => new Date(),
+): SicherheitDeps['zweiterFaktorBestaetigt'] {
+  return (req) => {
+    const token = parseCookies(req)[SESSION_COOKIE];
+    return token !== undefined && store.istBestaetigt(token, jetzt());
+  };
+}
+
+/** Wie `behandleFehler`, nur als Seite: nichts davon (Meldung des Parsers, Aufrufstapel) geht an den Browser. */
+const behandleSeitenFehler: ErrorRequestHandler = (err, req, res, next) => {
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  const status = (err as { status?: unknown } | null)?.status;
+  if (typeof status === 'number' && status >= 400 && status < 500) {
+    console.warn(`⚠️ Sicherheit: Anfrage abgewiesen (${status}): ${anfrageText(req)}`);
+    res.status(status === 413 ? 413 : 400).type('html').send(renderHinweis(
+      status === 413 ? 'Die Anfrage ist zu groß und wird nicht angenommen.' : 'Die Anfrage ließ sich nicht lesen.',
+    ));
+    return;
+  }
+  console.error(`❌ Sicherheit: ${err instanceof Error ? err.message : String(err)}`);
+  res.status(500).type('html').send(renderHinweis(GENERIC_ERROR_MESSAGE));
+};
+
+/**
+ * GET und POST /sicherheit/zweiter-faktor. Muss hinter der Session-Auth der
+ * Seiten stehen (`pageAuth`) und liegt, anders als die API, nicht unter
+ * /api/sicherheit/: dort verlangt `nurNutzer` den zweiten Faktor schon.
+ */
+export function createSicherheitZweiterFaktorRouter(deps: ZweiterFaktorDeps): Router {
+  const router = Router();
+  const jetzt = deps.jetzt ?? (() => new Date());
+  const fehlversuche = deps.codeFehlversuche ?? new FixedWindowLimiter(CODE_FEHLVERSUCHE_MAX, CODE_FEHLVERSUCHE_FENSTER_MS);
+
+  // Die Antworten zeigen einen Schlüssel oder entscheiden über den Zugang: in keinen Cache.
+  // Referrer-Policy same-origin statt der Voreinstellung der App (helmet: no-referrer): Unter
+  // no-referrer senden Browser bei einem Formular-POST den Origin "null", auch an die eigene
+  // Seite, und die Prüfung der Origin wiese jede Eingabe ab. same-origin lässt die echte Origin
+  // stehen und gibt nach außen weiterhin nichts preis.
+  const kopf: RequestHandler = (_req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    res.set('Referrer-Policy', 'same-origin');
+    next();
+  };
+
+  const nurWennKonfiguriert: RequestHandler = (_req, res, next) => {
+    if (fehlendeSicherheitKonfig(deps).length > 0) {
+      res.status(503).type('html').send(renderHinweis('Die Sicherheitsplattform ist in dieser Middleware nicht eingerichtet.'));
+      return;
+    }
+    next();
+  };
+
+  // Läuft nach der Session-Auth: nur ein Konto aus SICHERHEIT_NUTZER kommt weiter, der Master-Key
+  // hat hier nie Zugang (die Auth der Seiten kennt nur Sessions).
+  const nurKonto: RequestHandler = (req, res, next) => {
+    const user = getAuth(res)?.user;
+    if (!user || !istSicherheitNutzer(deps.nutzer, user.email)) {
+      console.warn(`🔒 Sicherheit: Zugriff verweigert (konto) von ${req.ip || 'unbekannt'}: ${anfrageText(req)}`);
+      res.status(403).type('html').send(renderHinweis('Dieses Konto hat keinen Zugang zur Sicherheitsplattform.'));
+      return;
+    }
+    next();
+  };
+
+  const nurEigeneOrigin: RequestHandler = (req, res, next) => {
+    if (!istEigeneOrigin(req)) {
+      console.warn(`🔒 Sicherheit: Eingabe mit fremder Origin abgewiesen von ${req.ip || 'unbekannt'}: ${anfrageText(req)}`);
+      res.status(400).type('html').send(renderHinweis('Die Anfrage kommt nicht von dieser Seite und wird nicht angenommen.'));
+      return;
+    }
+    next();
+  };
+
+  const zugang = [kopf, nurWennKonfiguriert, deps.pageAuth, nurKonto];
+
+  /** Die Seite passend zum Stand des Kontos: mit Schlüssel, solange nichts eingerichtet ist (dann gibt es einen Entwurf), sonst nur die Codeeingabe. */
+  function ansicht(user: User, meldung?: string): string {
+    const entwurf = deps.store.entwurfBereitstellen(user.id, neuesTotpGeheimnis());
+    return entwurf === null
+      ? renderEingabe({ email: user.email, aktion: ZWEITER_FAKTOR_PFAD, meldung })
+      : renderEinrichten({ email: user.email, geheimnis: entwurf, aktion: ZWEITER_FAKTOR_PFAD, meldung });
+  }
+
+  router.get(ZWEITER_FAKTOR_PFAD, ...zugang, (_req, res) => {
+    res.type('html').send(ansicht(getAuth(res)!.user!));
+  });
+
+  // Der Körper wird erst gelesen, wenn Konto und Origin stimmen, und ist auf 2 KB begrenzt. Die
+  // globalen Parser von index.ts laufen davor und haben ihn meist schon gelesen; dann tut dieser hier nichts.
+  router.post(ZWEITER_FAKTOR_PFAD, ...zugang, nurEigeneOrigin, express.urlencoded({ extended: false, limit: CODE_BODY_MAX }), (req, res) => {
+    const user = getAuth(res)!.user!;
+    const ip = req.ip || 'unbekannt';
+    const abweisen = (status: number, meldung: string) => res.status(status).type('html').send(ansicht(user, meldung));
+
+    // Gesperrt wird vor der Prüfung: auch der richtige Code geht dann nicht durch, sonst wäre die Sperre ein Orakel.
+    if (fehlversuche.blocked(user.id)) {
+      const sekunden = fehlversuche.sekundenBisReset(user.id);
+      const minuten = Math.ceil(sekunden / 60);
+      console.warn(`🔒 Sicherheit: Eingabe gesperrt für ${user.email} von ${ip}`);
+      res.set('Retry-After', String(sekunden));
+      abweisen(429, `Zu viele falsche Codes. Die Eingabe ist gesperrt, bitte versuche es in ${minuten} ${minuten === 1 ? 'Minute' : 'Minuten'} noch einmal.`);
+      return;
+    }
+
+    // Leerzeichen sind erlaubt (Apps zeigen "123 456"); was danach keine sechs Ziffern sind, ist kein Code
+    // und kein Fehlversuch.
+    const roh: unknown = req.body?.code;
+    const code = typeof roh === 'string' ? roh.replace(/\s+/g, '') : '';
+    if (!/^\d{6}$/.test(code)) {
+      abweisen(400, 'Bitte gib den sechsstelligen Code aus der App ein.');
+      return;
+    }
+
+    // Geprüft wird gegen das, was der Server hat: das Geheimnis oder, solange keins eingerichtet ist,
+    // seinen Entwurf. Aus dem Formular kommt nur der Code.
+    const zustand = deps.store.zustand(user.id);
+    const einrichten = zustand.geheimnis === null;
+    const geheimnis = zustand.geheimnis ?? zustand.entwurf;
+    if (geheimnis === null) {
+      abweisen(400, 'Der Schlüssel wurde gerade erst erzeugt. Lege zuerst den Eintrag in der App an und gib dann den Code ein.');
+      return;
+    }
+
+    const token = parseCookies(req)[SESSION_COOKIE]; // pageAuth hat ihn gelesen und die Session geprüft
+    const zeit = jetzt();
+    const schritt = findeTotpSchritt(geheimnis, code, zeit.getTime());
+    const angenommen = schritt !== null && (einrichten
+      ? deps.store.richteEin(user.id, token, geheimnis, schritt, zeit)
+      : deps.store.bestaetige(user.id, token, schritt, zeit));
+    if (!angenommen) {
+      fehlversuche.hit(user.id);
+      console.warn(`🔒 Sicherheit: falscher Code für ${user.email} von ${ip}`);
+      abweisen(401, 'Der Code stimmt nicht oder wurde schon verwendet. Bitte warte, bis die App einen neuen Code zeigt, und versuche es dann noch einmal.');
+      return;
+    }
+    console.log(`🛡️ Sicherheit: zweiter Faktor ${einrichten ? 'eingerichtet' : 'bestätigt'} für ${user.email}`);
+    res.redirect(303, NACH_BESTAETIGUNG);
+  });
+
+  router.use(behandleSeitenFehler);
   return router;
 }
