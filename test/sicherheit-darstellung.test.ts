@@ -23,6 +23,8 @@ import {
   mysitesText,
   quelleText,
   rueckfrageText,
+  rueckmeldungAuswerten,
+  seiteAusHash,
   siteFuerHost,
   siteText,
   standAlterText,
@@ -34,8 +36,10 @@ import {
   vertragText,
   waechterText,
   weltText,
+  wirksameAuswahl,
   zahlWort,
   zeitText,
+  zugangVerloren,
   type LageZeile,
   type SeitenAuftrag,
 } from '../src/services/sicherheit/darstellung.js';
@@ -104,11 +108,41 @@ describe('Alter in der Kopfzeile und Nachladen', () => {
     expect(standAlterText(aktuellesAlter(null, GELADEN, GELADEN))).toEqual({ text: 'Noch kein Stand empfangen', rot: true });
   });
 
+  const fall = (teile: Partial<Parameters<typeof standNeuLaden>[0]>) =>
+    standNeuLaden({ sichtbar: true, ohneZugang: false, ebenSichtbar: false, letzterVersuchMs: GELADEN, jetztMs: GELADEN, ...teile });
+
   it('stand_alle_5_minuten_nur_sichtbar: nachladen nur bei sichtbarem Reiter und frühestens 5 Minuten nach dem letzten Versuch', () => {
-    expect(standNeuLaden(true, GELADEN, GELADEN + 5 * MINUTE - 1)).toBe(false);
-    expect(standNeuLaden(true, GELADEN, GELADEN + 5 * MINUTE)).toBe(true);
-    expect(standNeuLaden(false, GELADEN, GELADEN + 60 * MINUTE)).toBe(false);
-    expect(standNeuLaden(true, 0, GELADEN)).toBe(true); // noch nie versucht
+    expect(fall({ jetztMs: GELADEN + 5 * MINUTE - 1 })).toBe(false);
+    expect(fall({ jetztMs: GELADEN + 5 * MINUTE })).toBe(true);
+    expect(fall({ sichtbar: false, jetztMs: GELADEN + 60 * MINUTE })).toBe(false);
+    expect(fall({ letzterVersuchMs: 0 })).toBe(true); // noch nie versucht
+  });
+
+  it('sofort, wenn der Reiter wieder sichtbar wird, aber nicht im Verborgenen', () => {
+    expect(fall({ ebenSichtbar: true, jetztMs: GELADEN + 1000 })).toBe(true);
+    expect(fall({ ebenSichtbar: true, sichtbar: false })).toBe(false);
+  });
+
+  it('nach_401_oder_403_kein_automatisches_nachladen: weder nach fünf Minuten noch beim Sichtbarwerden, bis „neu laden"', () => {
+    expect(fall({ ohneZugang: true, jetztMs: GELADEN + 60 * MINUTE })).toBe(false);
+    expect(fall({ ohneZugang: true, ebenSichtbar: true })).toBe(false);
+    expect(zugangVerloren(401)).toBe(true);
+    expect(zugangVerloren(403)).toBe(true);
+    for (const status of [0, 200, 400, 409, 413, 500, 503]) expect(zugangVerloren(status), String(status)).toBe(false);
+  });
+});
+
+describe('Reiter und Filter', () => {
+  it('seiteAusHash: nur die fünf Reiter, sonst null', () => {
+    expect(seiteAusHash('#flotte')).toBe('flotte');
+    expect(seiteAusHash('#waechter')).toBe('waechter');
+    for (const hash of ['', '#', '#Flotte', '#welle', '#quellen', 'flotte', '#flotte?x']) expect(seiteAusHash(hash), hash).toBeNull();
+  });
+
+  it('wirksameAuswahl: eine Auswahl, die es nach dem Nachladen nicht mehr gibt, wird „alle"', () => {
+    expect(wirksameAuswahl(['alle', 'mstudio', 'altwelt'], 'altwelt')).toBe('altwelt');
+    expect(wirksameAuswahl(['alle', 'mstudio'], 'altwelt')).toBe('alle');
+    expect(wirksameAuswahl(['alle'], 'alle')).toBe('alle');
   });
 });
 
@@ -318,14 +352,24 @@ describe('Sites und Einträge', () => {
 // ═════════════════════════════════════════════════════════════════
 
 describe('Urteile in der Lage', () => {
-  const HACK_TYPEN = ['A1', 'A2', 'B6a', 'B6b', 'B6c'];
-  const ANDERE_TYPEN = ['A3', 'A5', 'A6', 'A7', 'B1', 'B3', 'B4', 'B7', 'B8', 'I1', 'I2', 'I4', 'I6', 'I8', 'I9'];
+  const HACK_TYPEN = ['A1', 'A2', 'B6c'];
+  const ANDERE_TYPEN = ['A3', 'A5', 'A6', 'A7', 'B1', 'B3', 'B4', 'B6a', 'B6b', 'B7', 'B8', 'I1', 'I2', 'I4', 'I8', 'I9'];
 
-  it('kein_hack_nur_bei_hack_typen: „kein Hack" nur bei A1, A2 und B6a bis B6c (Hack-Verdacht, Cloaking, veränderte Startseite)', () => {
+  it('kein_hack_nur_bei_hack_typen: „kein Hack" nur bei A1, A2 und B6c (Hack-Verdacht, Cloaking, deutlich veränderte Startseite)', () => {
     for (const typ of HACK_TYPEN) expect(urteileFuerLage({ ...zeile(3), typ }), typ).toEqual(['erledigt', 'stumm', 'stimmt', 'kein-hack']);
+    // B6a (Startseite langsam) und B6b (Wartungsmodus) sind kein Hack-Verdacht
     for (const typ of ANDERE_TYPEN) expect(urteileFuerLage({ ...zeile(3), typ }), typ).toEqual(['erledigt', 'stumm', 'stimmt']);
     // im Beispiel-Stand trägt nur der Hack-Verdacht (A1) das Urteil
     expect(LAGE.filter((z) => urteileFuerLage(z).includes('kein-hack')).map((z) => z.typ)).toEqual(['A1']);
+  });
+
+  it('aufgeraeumt_statt_erledigt_bei_i6: ein Aufräum-Eintrag bietet „aufgeräumt" statt „erledigt", einzeln wie gesammelt', () => {
+    expect(urteileFuerLage(zeile(4))).toEqual(['aufgeraeumt', 'stumm', 'stimmt']);
+    expect(urteileFuerLage(zeile(11))).toEqual(['aufgeraeumt', 'stumm', 'stimmt']);
+    expect(urteileFuerLage({ ...zeile(4), site: '_alle', mitglieder: ['weg-a.de', 'weg-b.de'] })).toEqual(['aufgeraeumt', 'stumm']);
+    // geschickt wird dasselbe wie in der Ansicht Aufräumen: erledigt auf den I6
+    expect(auftragFuerLage(zeile(4), 'aufgeraeumt')).toEqual({ art: 'erledigt', site: 'verwaist.de', typ: 'I6', werte: {} });
+    expect(LAGE.filter((z) => urteileFuerLage(z).includes('aufgeraeumt')).map((z) => z.befundId)).toEqual([4, 11]);
   });
 
   it('stimmt_auf_jeder_einzelnen_zeile: jede Zeile einer Site bekommt „stimmt", Sammel- und Quellenzeilen nur erledigt und stumm', () => {
@@ -431,6 +475,34 @@ describe('Rückmeldung zu Aufträgen', () => {
     const fertig = laufend({ status: 'still', text: 'noch nicht übernommen, der Kern meldet sich nicht' });
     expect(auftragNachVerlauf(fertig, eintrag({ status: 'angewandt', quittungText: 'spät' }), GESENDET + 11 * 60_000)).toBe(fertig);
   });
+
+  it('rueckmeldung_auch_ohne_verlauf: scheitert der Abruf (null), erreicht ein Auftrag die 10-Minuten-Grenze trotzdem', () => {
+    const vorher = [laufend(), laufend({ id: null as unknown as string, ziel: 'site:x:stufe' })];
+    const davor = rueckmeldungAuswerten(vorher, null, GESENDET + 10 * 60_000 - 1);
+    expect(davor.geaendert).toBe(false);
+    expect(davor.auftraege.map((a) => a.status)).toEqual(['laeuft', 'laeuft']);
+    const danach = rueckmeldungAuswerten(vorher, null, GESENDET + 10 * 60_000);
+    expect(danach.geaendert).toBe(true);
+    expect(danach.auftraege[0]).toMatchObject({ status: 'still', text: 'noch nicht übernommen, der Kern meldet sich nicht' });
+    // ein Auftrag ohne ID (die API hat noch nicht geantwortet) bleibt, wie er ist
+    expect(danach.auftraege[1]).toBe(vorher[1]);
+    expect(danach.quittiert).toBeNull();
+  });
+
+  it('rueckmeldungAuswerten: Quittungen aus dem Verlauf, die jüngste Quittung von „angewandt" zum Nachladen', () => {
+    const vorher = [laufend(), laufend({ id: 'a-2', ziel: 'lage:4' }), laufend({ id: 'a-3', ziel: 'lage:5' })];
+    const ergebnis = rueckmeldungAuswerten(vorher, [
+      eintrag({ status: 'angewandt', quittungText: 'erledigt.', quittiertIso: '2026-10-24T12:03:00.000Z' }),
+      eintrag({ id: 'a-2', status: 'angewandt', quittungText: 'erledigt.', quittiertIso: '2026-10-24T12:04:00.000Z' }),
+      eintrag({ id: 'a-3', status: 'offen' }),
+      eintrag({ id: 'fremd', status: 'fehler', quittungText: 'nicht von dieser Seite' }),
+    ], GESENDET + 30_000);
+    expect(ergebnis.geaendert).toBe(true);
+    expect(ergebnis.quittiert).toBe('2026-10-24T12:04:00.000Z');
+    expect(ergebnis.auftraege.map((a) => a.status)).toEqual(['angewandt', 'angewandt', 'laeuft']);
+    expect(ergebnis.auftraege[2].erstelltIso).toBe('2026-10-24T12:00:00.123Z');
+    expect(rueckmeldungAuswerten(ergebnis.auftraege, [], GESENDET + 40_000).geaendert).toBe(false);
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════
@@ -472,7 +544,7 @@ describe('Einbettung ins Skript der Seite', () => {
   it('alle Funktionen sind eingebettet', () => {
     const namen = DARSTELLUNG_FUNKTIONEN.map((f) => f.name);
     for (const f of [ampelText, liegezeitText, standAlterText, kopfSatz, waechterText, auftragNachVerlauf, verlaufAnfrage, flottePasst,
-      urteileFuerLage, rueckfrageText, aktuellesAlter, standNeuLaden]) {
+      urteileFuerLage, rueckfrageText, aktuellesAlter, standNeuLaden, rueckmeldungAuswerten, zugangVerloren, seiteAusHash, wirksameAuswahl]) {
       expect(namen).toContain(f.name);
     }
     expect(new Set(namen).size).toBe(namen.length);

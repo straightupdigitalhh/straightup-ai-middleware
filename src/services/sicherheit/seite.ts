@@ -208,7 +208,7 @@ export function renderSicherheitSeite(opts: { zweiterFaktorPfad: string }): stri
       </article>
       <article class="sl-karte">
         <h2>Offene Einträge</h2>
-        <p class="sl-notiz">Ein Urteil geht als Auftrag an den Kern; bis seine Quittung da ist, steht dort „wird übernommen“. Sammel- und Quellenalarme lassen sich nur erledigen oder stumm schalten, ihre Sites klappen auf. Eine Zeile anklicken öffnet die Akte der Site.</p>
+        <p class="sl-notiz">Ein Urteil geht als Auftrag an den Kern; bis seine Quittung da ist, steht dort „wird übernommen“. „kein Hack“ und „aufgeräumt“ (so heißt „erledigt“ bei Aufräum-Einträgen) fragen vorher einmal nach. Sammel- und Quellenzeilen bieten nur „erledigt“ und „stumm bis“, ein Sammel-DNS-Alarm (A7) nur „stumm bis“; die Sites eines Sammelalarms klappen auf. Eine Zeile anklicken öffnet die Akte der Site.</p>
         <div class="sl-rahmen" id="lage-tabelle"></div>
       </article>
     </section>
@@ -320,14 +320,16 @@ function skript(zweiterFaktorPfad: string): string {
   var STUFEN = ['premium', 'standard', 'ohne', 'bewusst-ohne', 'intern', 'neu'];
   var MERKER = [['vip', 'VIP'], ['fremdhosting', 'Fremdhosting'], ['kein_ssh_moeglich', 'kein SSH möglich']];
   var AMPEL_KLASSE = { 'rot': 'sl-rot', 'gelb': 'sl-gelb', 'grün': 'sl-gruen', 'grau': 'sl-grau' };
-  var URTEIL_TEXT = { 'erledigt': 'erledigt', 'stumm': 'stumm bis', 'stimmt': 'stimmt', 'kein-hack': 'kein Hack' };
+  var URTEIL_TEXT = { 'erledigt': 'erledigt', 'aufgeraeumt': 'aufgeräumt', 'stumm': 'stumm bis', 'stimmt': 'stimmt', 'kein-hack': 'kein Hack' };
   /** So oft fragt die Seite den Verlauf, solange ein Auftrag läuft (die Obergrenze steht in auftragNachVerlauf). */
   var TAKT_MS = 10000;
+  /** So lange darf ein Abruf dauern, dann bricht er ab: Eine hängende Anfrage hielte sonst den Takt und jedes Nachladen an. */
+  var ZEITLIMIT_MS = 30000;
   /** So lange lädt sie nach einer Quittung den Stand nach, bis der neue da ist. */
   var STAND_WARTEN_MS = 2 * 60 * 1000;
 
   var st = {
-    antwort: null, geladenMs: 0, versuchtMs: 0, laedt: null,
+    antwort: null, geladenMs: 0, versuchtMs: 0, laedt: null, ohneZugang: false,
     seite: 'lage', akte: null,
     filter: { ampel: 'alle', welt: 'alle', stufe: 'alle', suche: '' },
     rsuche: '', sort: {}, offen: {}, eingaben: {}, rueckfrage: null,
@@ -393,7 +395,10 @@ function skript(zweiterFaktorPfad: string): string {
 
   // ─── Laden ───
 
-  /** fetch mit JSON: ok nur bei 2xx UND lesbarem JSON-Objekt; Status 0 ohne Verbindung. */
+  /**
+   * fetch mit JSON: ok nur bei 2xx UND lesbarem JSON-Objekt; Status 0 ohne Verbindung oder wenn der Abruf
+   * nach ZEITLIMIT_MS abbricht. Lehnt nie ab.
+   */
   function holeJson(url, koerper) {
     var init = { credentials: 'same-origin', headers: { 'Accept': 'application/json' } };
     if (koerper !== undefined) {
@@ -401,6 +406,9 @@ function skript(zweiterFaktorPfad: string): string {
       init.headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(koerper);
     }
+    var abbruch = typeof AbortController === 'function' ? new AbortController() : null;
+    if (abbruch) init.signal = abbruch.signal;
+    var wecker = setTimeout(function () { if (abbruch) abbruch.abort(); }, ZEITLIMIT_MS);
     return fetch(url, init).then(function (res) {
       return res.text().then(function (text) {
         var daten = null;
@@ -408,7 +416,12 @@ function skript(zweiterFaktorPfad: string): string {
         if (daten === null || typeof daten !== 'object' || Array.isArray(daten)) daten = null;
         return { ok: res.ok && daten !== null, status: res.status, koerper: daten };
       });
-    }).catch(function () { return { ok: false, status: 0, koerper: null }; });
+    }).catch(function () {
+      return { ok: false, status: 0, koerper: null };
+    }).then(function (ergebnis) {
+      clearTimeout(wecker);
+      return ergebnis;
+    });
   }
 
   function linkZu(ziel) {
@@ -432,6 +445,7 @@ function skript(zweiterFaktorPfad: string): string {
     st.laedt = holeJson('/api/sicherheit/stand').then(function (r) {
       st.laedt = null;
       if (!r.ok) {
+        if (zugangVerloren(r.status)) st.ohneZugang = true; // dann lädt die Seite erst nach „neu laden“ wieder von sich aus
         var f = apiFehlerText(r.status, r.koerper);
         zeigeHinweis('Der Stand ließ sich nicht laden. ' + f.text, f.ziel);
         if (!st.antwort) document.getElementById('kernsatz').textContent = 'Kein Stand geladen.';
@@ -524,14 +538,20 @@ function skript(zweiterFaktorPfad: string): string {
     var arbeit = [];
     if (url !== null) arbeit.push(holeJson(url).then(verlaufAuswerten));
     if (standFehlt) arbeit.push(standNachQuittung());
-    Promise.all(arbeit).then(function () { planeTakt(TAKT_MS); });
+    // Weiter nach Erfolg und nach Fehler (etwa einem Fehler beim Zeichnen): Sonst endete das Fragen still,
+    // und die Aufträge blieben auf „wird übernommen“, ohne je den gelben Satz zu erreichen.
+    function weiter() { planeTakt(TAKT_MS); }
+    Promise.all(arbeit).then(weiter, weiter);
   }
   function verlaufAuswerten(r) {
-    var jetzt = Date.now();
-    var jeId = {};
+    // Erst der Zustand (rein, ohne Anzeige): Die 10-Minuten-Grenze greift auch, wenn der Abruf scheiterte
+    // (eintraege null) oder später das Zeichnen fehlschlägt.
+    var eintraege = r.ok && Array.isArray(r.koerper.auftraege) ? r.koerper.auftraege : null;
+    var ergebnis = rueckmeldungAuswerten(st.auftraege, eintraege, Date.now());
+    ergebnis.auftraege.forEach(function (b, i) { if (b !== st.auftraege[i]) Object.assign(st.auftraege[i], b); });
+    if (eintraege === null && zugangVerloren(r.status)) st.ohneZugang = true;
     var hinweis = document.getElementById('hinweis');
-    if (r.ok && Array.isArray(r.koerper.auftraege)) {
-      r.koerper.auftraege.forEach(function (e) { if (e && typeof e.id === 'string') jeId[e.id] = e; });
+    if (eintraege !== null) {
       if (hinweis.getAttribute('data-von') === 'verlauf') hinweis.hidden = true;
     } else {
       // Ohne Verlauf läuft die Frist weiter; der Hinweis sagt, dass es an der Verbindung liegt und nicht am Kern.
@@ -539,23 +559,12 @@ function skript(zweiterFaktorPfad: string): string {
       zeigeHinweis('Der Verlauf der Aufträge ließ sich nicht lesen. ' + f.text, f.ziel);
       hinweis.setAttribute('data-von', 'verlauf');
     }
-    var geaendert = false;
-    var quittiert = null;
-    st.auftraege.forEach(function (a) {
-      if (a.id === null || a.status !== 'laeuft') return;
-      var neu = auftragNachVerlauf(a, jeId[a.id], jetzt);
-      if (neu.status !== a.status) {
-        geaendert = true;
-        if (neu.status === 'angewandt' && neu.quittiertIso && (quittiert === null || neu.quittiertIso > quittiert)) quittiert = neu.quittiertIso;
-      }
-      Object.assign(a, neu);
-    });
-    if (quittiert !== null) {
-      if (st.standFrischAb === null || quittiert > st.standFrischAb) st.standFrischAb = quittiert;
-      st.standFrist = jetzt + STAND_WARTEN_MS;
+    if (ergebnis.quittiert !== null) {
+      if (st.standFrischAb === null || ergebnis.quittiert > st.standFrischAb) st.standFrischAb = ergebnis.quittiert;
+      st.standFrist = Date.now() + STAND_WARTEN_MS;
       return standNachQuittung();
     }
-    if (geaendert) zeichne();
+    if (ergebnis.geaendert) zeichne();
   }
   /** Bei „angewandt“ den Stand neu laden; der Kern schiebt ihn gleich nach der Quittung, also kann er noch ein paar Sekunden alt sein. */
   function standNachQuittung() {
@@ -755,6 +764,11 @@ function skript(zweiterFaktorPfad: string): string {
         sende(auftragFuerLage(z, 'kein-hack'), ziel, URTEIL_TEXT['kein-hack'] + ': ' + siteText(z.site) + ', ' + z.typ);
       }), ziel);
     }
+    if (rueckfrageOffen(ziel, 'aufgeraeumt')) {
+      return mitRueck(rueckfrageBox(rueckfrageText('aufgeraeumt', z), 'Ja, aufräumen', function () {
+        sende(auftragFuerLage(z, 'aufgeraeumt'), ziel, 'aufgeräumt: ' + siteText(z.site));
+      }), ziel);
+    }
     var aus = laeuft(ziel);
     var box = el('div', 'sl-aktionen');
     urteileFuerLage(z).forEach(function (art) {
@@ -764,7 +778,7 @@ function skript(zweiterFaktorPfad: string): string {
           if (!feld.value) { pflicht(feld, 'Bitte ein Datum wählen.'); return; }
           sende(auftragFuerLage(z, 'stumm', feld.value), ziel, 'stumm bis ' + tagText(feld.value) + ': ' + siteText(z.site) + ', ' + z.typ);
         }, aus));
-      } else if (art === 'kein-hack') {
+      } else if (art === 'kein-hack' || art === 'aufgeraeumt') {
         box.append(knopf(URTEIL_TEXT[art], function () { frageZuerst(ziel, art); }, aus));
       } else {
         box.append(knopf(URTEIL_TEXT[art], function () {
@@ -822,10 +836,13 @@ function skript(zweiterFaktorPfad: string): string {
 
   // ─── Flotte ───
 
+  /** Füllt eine Auswahl und liefert, was wirkt: einen Wert, den es nicht mehr gibt, ersetzt „alle“ (wirksameAuswahl). */
   function auswahl(id, optionen, wert) {
     var sel = document.getElementById(id);
     sel.replaceChildren.apply(sel, optionen.map(function (o) { var opt = el('option', null, o[1]); opt.value = o[0]; return opt; }));
-    sel.value = optionen.some(function (o) { return o[0] === wert; }) ? wert : 'alle';
+    var wirksam = wirksameAuswahl(optionen.map(function (o) { return o[0]; }), wert);
+    sel.value = wirksam;
+    return wirksam;
   }
   function zeichneFilter(flotte) {
     var zahl = { 'alle': flotte.length, 'rot': 0, 'gelb': 0, 'grün': 0, 'grau': 0 };
@@ -842,12 +859,12 @@ function skript(zweiterFaktorPfad: string): string {
     }));
     var welten = {};
     flotte.forEach(function (z) { welten[z.welt] = (welten[z.welt] || 0) + 1; });
-    auswahl('f-welt', [['alle', 'jede Welt']].concat(Object.keys(welten).sort().map(function (w) {
+    st.filter.welt = auswahl('f-welt', [['alle', 'jede Welt']].concat(Object.keys(welten).sort().map(function (w) {
       return [w, weltText(w) + ' (' + welten[w] + ')'];
     })), st.filter.welt);
     var stufen = {};
     flotte.forEach(function (z) { var k = z.stufe || 'keine'; stufen[k] = (stufen[k] || 0) + 1; });
-    auswahl('f-stufe', [['alle', 'jede Stufe']].concat(STUFEN.concat(['keine']).filter(function (k) { return stufen[k]; }).map(function (k) {
+    st.filter.stufe = auswahl('f-stufe', [['alle', 'jede Stufe']].concat(STUFEN.concat(['keine']).filter(function (k) { return stufen[k]; }).map(function (k) {
       return [k, stufeName(k === 'keine' ? null : k) + ' (' + stufen[k] + ')'];
     })), st.filter.stufe);
   }
@@ -1005,7 +1022,7 @@ function skript(zweiterFaktorPfad: string): string {
     if (z.grund === 'verschwunden') {
       if (rueckfrageOffen(ziel, 'aufgeraeumt')) {
         return mitRueck(rueckfrageBox(rueckfrageText('aufgeraeumt', i6), 'Ja, aufräumen', function () {
-          sende(auftragFuerLage(i6, 'erledigt'), ziel, 'aufgeräumt: ' + siteText(i6.site));
+          sende(auftragFuerLage(i6, 'aufgeraeumt'), ziel, 'aufgeräumt: ' + siteText(i6.site));
         }), ziel);
       }
       box.append(knopf('aufgeräumt', function () { frageZuerst(ziel, 'aufgeraeumt'); }, aus));
@@ -1295,9 +1312,14 @@ function skript(zweiterFaktorPfad: string): string {
    */
   function uhrschlag() {
     zeichneKopf();
-    if (!standNeuLaden(document.visibilityState === 'visible', st.versuchtMs, Date.now())) return;
+    if (!automatischLaden(false)) return;
     if (tipptGerade()) return;
     ladeStand();
+  }
+  /** Darf die Seite jetzt von sich aus laden? Nie verborgen, nie nach 401 oder 403 (bis „neu laden“), sonst nach fünf Minuten oder beim Sichtbarwerden. */
+  function automatischLaden(ebenSichtbar) {
+    return standNeuLaden({ sichtbar: document.visibilityState === 'visible', ohneZugang: st.ohneZugang,
+      ebenSichtbar: ebenSichtbar, letzterVersuchMs: st.versuchtMs, jetztMs: Date.now() });
   }
 
   function zeigeSeite(id, merken) {
@@ -1322,9 +1344,14 @@ function skript(zweiterFaktorPfad: string): string {
         zeigeSeite(ziel.getAttribute('data-seite'), true);
       });
     });
-    var anfang = location.hash.slice(1);
-    zeigeSeite(SEITEN.indexOf(anfang) >= 0 ? anfang : 'lage', false);
-    document.getElementById('neu-laden').addEventListener('click', function () { ladeStand(); });
+    zeigeSeite(seiteAusHash(location.hash) || 'lage', false);
+    // Ein neuer Hash im selben Dokument (Zurück, Vor, ein Link auf #flotte) wechselt den Reiter.
+    window.addEventListener('hashchange', function () {
+      var ziel = seiteAusHash(location.hash);
+      if (ziel !== null && ziel !== st.seite) zeigeSeite(ziel, false);
+    });
+    // „neu laden“ gibt das automatische Nachladen nach einem 401 oder 403 wieder frei.
+    document.getElementById('neu-laden').addEventListener('click', function () { st.ohneZugang = false; ladeStand(); });
     document.getElementById('akte-zu').addEventListener('click', schliesseAkte);
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
@@ -1344,7 +1371,7 @@ function skript(zweiterFaktorPfad: string): string {
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible') return;
       zeichneKopf();
-      ladeStand();
+      if (automatischLaden(true)) ladeStand();
     });
     ladeStand();
   }

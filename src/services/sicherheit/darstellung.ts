@@ -145,9 +145,19 @@ export function aktuellesAlter(alterMinuten: unknown, geladenMs: number, jetztMs
   return alterMinuten + Math.max(0, jetztMs - geladenMs) / 60000;
 }
 
-/** Ist der Stand neu zu laden? Nur bei sichtbarem Reiter und frühestens fünf Minuten nach dem letzten Versuch. */
-export function standNeuLaden(sichtbar: boolean, letzterVersuchMs: number, jetztMs: number): boolean {
-  return sichtbar && jetztMs - letzterVersuchMs >= 5 * 60 * 1000;
+/**
+ * Lädt die Seite den Stand von sich aus nach? Nie bei verborgenem Reiter und nie, nachdem die API mit 401
+ * oder 403 geantwortet hat (`ohneZugang`, bis „neu laden"). Sonst sofort, wenn der Reiter eben sichtbar wurde,
+ * und ansonsten frühestens fünf Minuten nach dem letzten Versuch.
+ */
+export function standNeuLaden(a: { sichtbar: boolean; ohneZugang: boolean; ebenSichtbar: boolean; letzterVersuchMs: number; jetztMs: number }): boolean {
+  if (!a.sichtbar || a.ohneZugang) return false;
+  return a.ebenSichtbar || a.jetztMs - a.letzterVersuchMs >= 5 * 60 * 1000;
+}
+
+/** Hat die API den Zugang verweigert (Anmeldung abgelaufen, zweiter Faktor nicht mehr bestätigt)? */
+export function zugangVerloren(status: number): boolean {
+  return status === 401 || status === 403;
 }
 
 // ─── Zeiten ──────────────────────────────────────────────────────
@@ -352,14 +362,17 @@ export function i6FuerSite(lage: LageZeile[], site: string): LageZeile | null {
 /**
  * Die Urteile, die eine Zeile der Lage anbietet. Jede Zeile einer Site: erledigt,
  * stumm und stimmt; „kein Hack" nur, wo ein Hack in Frage steht (A1 Hack-Verdacht,
- * A2 Cloaking, B6a bis B6c Startseite). Sammel- und Quellenzeilen (`_alle`,
- * `_quelle:<name>`) kennen nur erledigt und stumm; einen Sammel-A7 schließt der
- * Kern nicht (er übernimmt DNS nur je Site), er bleibt stumm.
+ * A2 Cloaking, B6c deutlich veränderte Startseite). Ein Aufräum-Eintrag (I6) heißt
+ * „aufgeraeumt" statt erledigt: Der Kern nimmt dann Installationen aus dem Inventar.
+ * Sammel- und Quellenzeilen (`_alle`, `_quelle:<name>`) kennen nur erledigt (beim
+ * I6 „aufgeraeumt") und stumm; einen Sammel-A7 schließt der Kern nicht (er übernimmt
+ * DNS nur je Site), er bleibt stumm.
  */
 export function urteileFuerLage(zeile: LageZeile): string[] {
-  if (zeile.site.charAt(0) === '_') return zeile.typ === 'A7' ? ['stumm'] : ['erledigt', 'stumm'];
-  if (['A1', 'A2', 'B6a', 'B6b', 'B6c'].indexOf(zeile.typ) >= 0) return ['erledigt', 'stumm', 'stimmt', 'kein-hack'];
-  return ['erledigt', 'stumm', 'stimmt'];
+  var schliessen = zeile.typ === 'I6' ? 'aufgeraeumt' : 'erledigt';
+  if (zeile.site.charAt(0) === '_') return zeile.typ === 'A7' ? ['stumm'] : [schliessen, 'stumm'];
+  if (['A1', 'A2', 'B6c'].indexOf(zeile.typ) >= 0) return [schliessen, 'stumm', 'stimmt', 'kein-hack'];
+  return [schliessen, 'stumm', 'stimmt'];
 }
 
 /**
@@ -380,9 +393,9 @@ export function rueckfrageText(art: string, zeile: LageZeile): string {
   return '';
 }
 
-/** Der Auftrag zu einem Urteil, genau in der Form, die POST /api/sicherheit/auftraege annimmt. */
+/** Der Auftrag zu einem Urteil, genau in der Form, die POST /api/sicherheit/auftraege annimmt („aufgeraeumt" ist erledigt auf den I6). */
 export function auftragFuerLage(zeile: LageZeile, art: string, bis?: string): AuftragKoerper {
-  if (art === 'erledigt') return { art: art, site: zeile.site, typ: zeile.typ, werte: {} };
+  if (art === 'erledigt' || art === 'aufgeraeumt') return { art: 'erledigt', site: zeile.site, typ: zeile.typ, werte: {} };
   if (art === 'stumm') return { art: art, site: zeile.site, typ: zeile.typ, werte: { bis: bis } };
   return { art: art, site: zeile.site, werte: { befundId: zeile.befundId } };
 }
@@ -443,6 +456,44 @@ export function auftragNachVerlauf(auftrag: SeitenAuftrag, eintrag: VerlaufEintr
   return Object.assign({}, auftrag, { erstelltIso: erstellt }) as SeitenAuftrag;
 }
 
+/**
+ * Ein Schritt der Rückmeldung für alle laufenden Aufträge der Seite (mit ID): Quittungen aus dem
+ * Verlauf übernehmen und die 10-Minuten-Grenze anwenden. `eintraege` ist null, wenn der Abruf
+ * scheiterte; die Grenze gilt dann trotzdem. `quittiert`: die jüngste Quittung eines neu angewandten
+ * Auftrags (danach lädt die Seite den Stand neu), sonst null.
+ */
+export function rueckmeldungAuswerten(
+  auftraege: SeitenAuftrag[], eintraege: VerlaufEintrag[] | null, jetztMs: number,
+): { auftraege: SeitenAuftrag[]; geaendert: boolean; quittiert: string | null } {
+  var jeId: Record<string, VerlaufEintrag> = {};
+  (eintraege || []).forEach(function (e) { if (e && typeof e.id === 'string') jeId[e.id] = e; });
+  var geaendert = false;
+  var quittiert: string | null = null;
+  var neu = auftraege.map(function (a) {
+    if (!a.id || a.status !== 'laeuft') return a;
+    var b = auftragNachVerlauf(a, jeId[a.id], jetztMs);
+    if (b.status !== a.status) {
+      geaendert = true;
+      if (b.status === 'angewandt' && b.quittiertIso && (quittiert === null || b.quittiertIso > quittiert)) quittiert = b.quittiertIso;
+    }
+    return b;
+  });
+  return { auftraege: neu, geaendert: geaendert, quittiert: quittiert };
+}
+
+// ─── Reiter und Filter ───────────────────────────────────────────
+
+/** Der Reiter zu einem Hash der Adresse (#flotte), sonst null. */
+export function seiteAusHash(hash: string): string | null {
+  var id = hash.charAt(0) === '#' ? hash.slice(1) : '';
+  return ['lage', 'flotte', 'abdeckung', 'aufraeumen', 'waechter'].indexOf(id) >= 0 ? id : null;
+}
+
+/** Die Auswahl eines Filters, wie sie wirkt: Gibt es den Wert nach dem Nachladen nicht mehr, gilt „alle". */
+export function wirksameAuswahl(werte: string[], wert: string): string {
+  return werte.indexOf(wert) >= 0 ? wert : 'alle';
+}
+
 // ─── Filter der Flotte ───────────────────────────────────────────
 
 /** Passt die Installation zu den Filtern? Ampel als Wort, Stufe „keine" für ohne Einordnung, Suche in allen Textfeldern. */
@@ -462,8 +513,9 @@ export function flottePasst(zeile: FlottenZeile, filter: FlottenFilter, vertraeg
 
 /** Alles, was seite.ts ins Skript der Seite einbettet. */
 export const DARSTELLUNG_FUNKTIONEN = [
-  zahlWort, ampelText, ampelRang, liegezeitText, standAlterText, aktuellesAlter, standNeuLaden, zeitText, datumText, tagText,
-  kopfSatz, waechterText, siteText, weltText, stufeName, quelleText, stufeText, merkerText, kundeText, vertragText,
-  ausgeliefertText, mysitesText, backupText, hostForm, siteFuerHost, eintraegeDerSite, i6FuerSite, urteileFuerLage,
-  rueckfrageText, auftragFuerLage, apiFehlerText, verlaufAnfrage, auftragNachVerlauf, flottePasst,
+  zahlWort, ampelText, ampelRang, liegezeitText, standAlterText, aktuellesAlter, standNeuLaden, zugangVerloren, zeitText,
+  datumText, tagText, kopfSatz, waechterText, siteText, weltText, stufeName, quelleText, stufeText, merkerText, kundeText,
+  vertragText, ausgeliefertText, mysitesText, backupText, hostForm, siteFuerHost, eintraegeDerSite, i6FuerSite,
+  urteileFuerLage, rueckfrageText, auftragFuerLage, apiFehlerText, verlaufAnfrage, auftragNachVerlauf,
+  rueckmeldungAuswerten, seiteAusHash, wirksameAuswahl, flottePasst,
 ];

@@ -262,37 +262,73 @@ describe('Die Seite /sicherheit', () => {
     return new Function(`${skript(html, 'darstellung')}\nreturn { ${namen.join(', ')} };`)();
   }
 
-  it('urteile_im_ausgelieferten_skript: „kein Hack" nur bei A1, A2 und B6a bis B6c, „stimmt" auf jeder einzelnen Zeile, Rückfrage vor „kein Hack" und „aufgeräumt"', async () => {
+  it('urteile_im_ausgelieferten_skript: „kein Hack" nur bei A1, A2 und B6c, „stimmt" auf jeder einzelnen Zeile, „aufgeräumt" bei I6, Rückfrage vor „kein Hack" und „aufgeräumt"', async () => {
     const { res } = await bestaetigteSeite();
     const imSkript = ausDemSkript(res.text);
     const vorbild = BEISPIEL.lage.find((z: any) => z.typ === 'A1');
     for (const typ of ['A1', 'A2', 'A3', 'A5', 'A6', 'A7', 'B1', 'B4', 'B6a', 'B6b', 'B6c', 'I1', 'I2', 'I4', 'I6', 'I9']) {
       const urteile: string[] = imSkript.urteileFuerLage({ ...vorbild, typ });
       expect(urteile, typ).toContain('stimmt');
-      expect(urteile.includes('kein-hack'), typ).toBe(['A1', 'A2', 'B6a', 'B6b', 'B6c'].includes(typ));
+      expect(urteile.includes('kein-hack'), typ).toBe(['A1', 'A2', 'B6c'].includes(typ));
+      expect(urteile[0], typ).toBe(typ === 'I6' ? 'aufgeraeumt' : 'erledigt');
     }
     for (const z of BEISPIEL.lage) {
       const urteile: string[] = imSkript.urteileFuerLage(z);
       expect(urteile.includes('stimmt'), `${z.befundId}`).toBe(!z.site.startsWith('_'));
     }
     expect(imSkript.urteileFuerLage({ ...vorbild, site: '_alle', typ: 'B6c' })).toEqual(['erledigt', 'stumm']);
-    // Das Skript baut die Knöpfe aus urteileFuerLage und fragt vor „kein Hack" und „aufgeräumt" einmal nach.
+    expect(imSkript.urteileFuerLage({ ...vorbild, site: '_alle', typ: 'I6' })).toEqual(['aufgeraeumt', 'stumm']);
+    // Das Skript baut die Knöpfe aus urteileFuerLage und fragt vor „kein Hack" und „aufgeräumt" einmal nach,
+    // in der Lage (z) wie in der Ansicht Aufräumen (i6).
     const client = skript(res.text, null);
     expect(client).toContain('urteileFuerLage(z)');
     expect(client).toContain("rueckfrageText('kein-hack', z)");
+    expect(client).toContain("rueckfrageText('aufgeraeumt', z)");
     expect(client).toContain("rueckfrageText('aufgeraeumt', i6)");
     expect(imSkript.rueckfrageText('kein-hack', vorbild)).toContain('mit dem Urteil „kein Hack“ geschlossen');
   });
 
-  it('stand_alle_5_minuten_nur_sichtbar: das Skript lädt den Stand nach, solange der Reiter sichtbar ist, und sofort, wenn er wieder sichtbar wird; das Alter rechnet ab dem Abruf', async () => {
+  it('stand_alle_5_minuten_nur_sichtbar: das Skript lädt den Stand nach, solange der Reiter sichtbar ist, und sofort, wenn er wieder sichtbar wird, nach 401 oder 403 erst wieder nach „neu laden"; das Alter rechnet ab dem Abruf', async () => {
     const { res } = await bestaetigteSeite();
     const client = skript(res.text, null);
-    expect(client).toContain("standNeuLaden(document.visibilityState === 'visible', st.versuchtMs, Date.now())");
+    expect(client).toContain("standNeuLaden({ sichtbar: document.visibilityState === 'visible', ohneZugang: st.ohneZugang,");
     expect(client).toMatch(/addEventListener\('visibilitychange'/);
+    expect(client).toContain('zugangVerloren(r.status)');
     expect(client).toContain('aktuellesAlter(st.antwort.alterMinuten, st.geladenMs, Date.now())');
     const imSkript = ausDemSkript(res.text);
-    expect(imSkript.standNeuLaden(false, 0, Date.now())).toBe(false);
+    expect(imSkript.standNeuLaden({ sichtbar: false, ohneZugang: false, ebenSichtbar: true, letzterVersuchMs: 0, jetztMs: Date.now() })).toBe(false);
+    expect(imSkript.standNeuLaden({ sichtbar: true, ohneZugang: true, ebenSichtbar: true, letzterVersuchMs: 0, jetztMs: Date.now() })).toBe(false);
     expect(imSkript.aktuellesAlter(3, 0, 5 * 60_000)).toBe(8);
+  });
+
+  it('takt_und_abrufe_enden_nie_still: der Takt geht nach Erfolg und Fehler weiter, jeder Abruf bricht nach 30 Sekunden ab, die Grenze gilt auch ohne Verlauf', async () => {
+    const { res } = await bestaetigteSeite();
+    const client = skript(res.text, null);
+    expect(client).toContain('Promise.all(arbeit).then(weiter, weiter)');
+    expect(client).toContain('new AbortController()');
+    expect(client).toContain('var ZEITLIMIT_MS = 30000;');
+    expect(client).toContain('rueckmeldungAuswerten(st.auftraege, eintraege, Date.now())');
+    const imSkript = ausDemSkript(res.text);
+    const laufend = { id: 'a', ziel: 'lage:3', gesendetMs: 0, erstelltIso: null, status: 'laeuft', text: 'wird übernommen', quittiertIso: null };
+    expect(imSkript.rueckmeldungAuswerten([laufend], null, 10 * 60_000).auftraege[0].status).toBe('still');
+  });
+
+  it('reiter_folgt_dem_hash: ein Wechsel des Hash im selben Dokument wechselt den Reiter; Filter bleiben wirksam', async () => {
+    const { res } = await bestaetigteSeite();
+    const client = skript(res.text, null);
+    expect(client).toMatch(/addEventListener\('hashchange'/);
+    expect(client).toContain('seiteAusHash(location.hash)');
+    expect(client).toContain("st.filter.welt = auswahl('f-welt'");
+    expect(client).toContain("st.filter.stufe = auswahl('f-stufe'");
+    const imSkript = ausDemSkript(res.text);
+    expect(imSkript.seiteAusHash('#aufraeumen')).toBe('aufraeumen');
+    expect(imSkript.wirksameAuswahl(['alle', 'mstudio'], 'altwelt')).toBe('alle');
+  });
+
+  it('die notiz_der_lage nennt, was Sammelzeilen anbieten', async () => {
+    const { res } = await bestaetigteSeite();
+    expect(res.text).not.toContain('lassen sich nur erledigen oder stumm schalten');
+    expect(res.text).toContain('Sammel- und Quellenzeilen bieten nur „erledigt“ und „stumm bis“, ein Sammel-DNS-Alarm (A7) nur „stumm bis“');
   });
 
   it('mit der Session der Seite liefert die API den Stand, den die Seite rendert', async () => {
