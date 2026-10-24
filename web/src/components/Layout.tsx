@@ -9,9 +9,11 @@ const navItems = [
   { to: '/nutzer', label: 'Nutzer', adminOnly: true },
 ];
 
+// Sicherheit nur für Admins: Wer nicht in SICHERHEIT_NUTZER steht, bekäme dort ohnehin 403.
 const externalTools = [
   { href: '/wissenssystem', label: 'Wissenssystem ↗' },
   { href: '/teamboard', label: 'Teamboard ↗' },
+  { href: '/sicherheit', label: 'Sicherheit ↗', adminOnly: true },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -43,15 +45,17 @@ export default function Layout({ children }: { children: ReactNode }) {
             ))}
           <div className="pt-4 mt-4 border-t border-neutral-100">
             <div className="px-3 pb-1 text-xs uppercase tracking-wide text-neutral-400">Werkzeuge</div>
-            {externalTools.map(tool => (
-              <a
-                key={tool.href}
-                href={tool.href}
-                className="block rounded-lg px-3 py-2 text-sm text-neutral-600 hover:bg-neutral-100"
-              >
-                {tool.label}
-              </a>
-            ))}
+            {externalTools
+              .filter(tool => !tool.adminOnly || user?.role === 'admin')
+              .map(tool => (
+                <a
+                  key={tool.href}
+                  href={tool.href}
+                  className="block rounded-lg px-3 py-2 text-sm text-neutral-600 hover:bg-neutral-100"
+                >
+                  {tool.label}
+                </a>
+              ))}
           </div>
         </nav>
         <div className="p-4 border-t border-neutral-100 text-sm">

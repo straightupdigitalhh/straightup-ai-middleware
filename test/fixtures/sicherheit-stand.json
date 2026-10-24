@@ -1,11 +1,12 @@
 {
   "version": 1,
   "erzeugtIso": "2026-10-24T12:00:00.000Z",
+  "vertraegeGeladen": true,
   "runde": {
     "id": 4,
     "beendetIso": "2026-10-24T11:12:00.000Z",
     "quellen": {
-      "ok": 9,
+      "ok": 11,
       "ausgefallen": [
         "collmex"
       ]
@@ -823,6 +824,20 @@
         "grund": "Stichtag 20260701: Collmex: HTTP 500",
         "dauerMs": 120,
         "ausfallserie": 2
+      },
+      {
+        "quelle": "inventar",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
+      },
+      {
+        "quelle": "regeln",
+        "ok": true,
+        "grund": null,
+        "dauerMs": 120,
+        "ausfallserie": 0
       }
     ]
   },

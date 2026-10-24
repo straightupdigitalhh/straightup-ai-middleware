@@ -106,8 +106,11 @@ ${meldungsAbsatz(a.meldung)}${formular(a.aktion, 'Bestätigen')}
 <p class="leise">Angemeldet als ${h(a.email)}.</p>`);
 }
 
-/** Eine Seite ohne Formular für Antworten, die nichts weiter erlauben (kein Zugang, nicht eingerichtet, Fehler). */
-export function renderHinweis(text: string): string {
-  return seite('Zweiter Faktor', `<h1>Zweiter Faktor</h1>
+/**
+ * Eine Seite ohne Formular für Antworten, die nichts weiter erlauben (kein Zugang, nicht eingerichtet, Fehler).
+ * `titel` nennt die Seite, die abweist; die Seite /sicherheit nutzt denselben Hinweis.
+ */
+export function renderHinweis(text: string, titel = 'Zweiter Faktor'): string {
+  return seite(titel, `<h1>${h(titel)}</h1>
 <p>${h(text)}</p>`);
 }

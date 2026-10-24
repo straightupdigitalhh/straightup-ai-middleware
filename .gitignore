@@ -5,3 +5,4 @@ data/
 web/node_modules
 web/dist
 .worktrees/
+.sicherheit-dev/

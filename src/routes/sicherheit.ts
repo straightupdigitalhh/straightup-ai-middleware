@@ -6,12 +6,14 @@ import type { ZweiterFaktorStore } from '../core/zweiter-faktor.js';
 import { getAuth, parseCookies, safeEqual } from '../services/auth.js';
 import { GENERIC_ERROR_MESSAGE } from '../services/errors.js';
 import { FixedWindowLimiter } from '../services/rate-limit.js';
+import { renderSicherheitSeite } from '../services/sicherheit/seite.js';
 import { AUFTRAG_ARTEN, type AuftragArt, type SicherheitSpeicher } from '../services/sicherheit/speicher.js';
 import { renderEingabe, renderEinrichten, renderHinweis } from '../services/sicherheit/zweiter-faktor-seite.js';
 
 // ─── API der Sicherheitsplattform (Teil 1) ───────────────────────
 //
-// Drei Router, weil die Endpunkte verschiedene Anrufer haben:
+// Vier Router, weil die Endpunkte verschiedene Anrufer haben (der vierte, die
+// Seite /sicherheit selbst, steht am Ende der Datei):
 //
 //  Dienst (der Wachdienst im Agenten-Haus, Header X-Dienst-Schluessel): Stand
 //  schieben, offene Aufträge holen, Aufträge quittieren. Kennt weder Session
@@ -507,6 +509,9 @@ const CODE_FEHLVERSUCHE_FENSTER_MS = 15 * 60 * 1000;
 const CODE_BODY_MAX = '2kb';
 /** Wohin es nach einem angenommenen Code geht: ins Dashboard. */
 const NACH_BESTAETIGUNG = '/sicherheit';
+/** Die Überschrift der Hinweisseiten (kein Zugang, nicht eingerichtet) je Seite. */
+const TITEL_ZWEITER_FAKTOR = 'Zweiter Faktor';
+const TITEL_SEITE = 'Sicherheitslage';
 
 export interface ZweiterFaktorDeps extends SicherheitKonfig {
   store: ZweiterFaktorStore;
@@ -529,6 +534,36 @@ export function createZweiterFaktorPruefung(
   return (req) => {
     const token = parseCookies(req)[SESSION_COOKIE];
     return token !== undefined && store.istBestaetigt(token, jetzt());
+  };
+}
+
+// Die beiden Seiten (zweiter Faktor und /sicherheit) prüfen den Zugang gleich; `titel` nennt die Seite auf dem Hinweis.
+
+/** Seiten: ist die Funktion aus, 503 mit Hinweisseite, auch ohne Anmeldung. */
+function seiteNurWennKonfiguriert(konfig: SicherheitKonfig, titel: string): RequestHandler {
+  return (_req, res, next) => {
+    if (fehlendeSicherheitKonfig(konfig).length > 0) {
+      res.status(503).type('html').send(renderHinweis('Die Sicherheitsplattform ist in dieser Middleware nicht eingerichtet.', titel));
+      return;
+    }
+    next();
+  };
+}
+
+/**
+ * Seiten, nach der Session-Auth: nur ein Konto aus SICHERHEIT_NUTZER, sonst 403
+ * mit Hinweisseite. Der Master-Key hat hier nie Zugang (die Auth der Seiten kennt
+ * nur Sessions).
+ */
+function seiteNurKonto(konfig: SicherheitKonfig, titel: string): RequestHandler {
+  return (req, res, next) => {
+    const user = getAuth(res)?.user;
+    if (!user || !istSicherheitNutzer(konfig.nutzer, user.email)) {
+      console.warn(`🔒 Sicherheit: Zugriff verweigert (konto) von ${req.ip || 'unbekannt'}: ${anfrageText(req)}`);
+      res.status(403).type('html').send(renderHinweis('Dieses Konto hat keinen Zugang zur Sicherheitsplattform.', titel));
+      return;
+    }
+    next();
   };
 }
 
@@ -571,26 +606,6 @@ export function createSicherheitZweiterFaktorRouter(deps: ZweiterFaktorDeps): Ro
     next();
   };
 
-  const nurWennKonfiguriert: RequestHandler = (_req, res, next) => {
-    if (fehlendeSicherheitKonfig(deps).length > 0) {
-      res.status(503).type('html').send(renderHinweis('Die Sicherheitsplattform ist in dieser Middleware nicht eingerichtet.'));
-      return;
-    }
-    next();
-  };
-
-  // Läuft nach der Session-Auth: nur ein Konto aus SICHERHEIT_NUTZER kommt weiter, der Master-Key
-  // hat hier nie Zugang (die Auth der Seiten kennt nur Sessions).
-  const nurKonto: RequestHandler = (req, res, next) => {
-    const user = getAuth(res)?.user;
-    if (!user || !istSicherheitNutzer(deps.nutzer, user.email)) {
-      console.warn(`🔒 Sicherheit: Zugriff verweigert (konto) von ${req.ip || 'unbekannt'}: ${anfrageText(req)}`);
-      res.status(403).type('html').send(renderHinweis('Dieses Konto hat keinen Zugang zur Sicherheitsplattform.'));
-      return;
-    }
-    next();
-  };
-
   const nurEigeneOrigin: RequestHandler = (req, res, next) => {
     if (!istEigeneOrigin(req)) {
       console.warn(`🔒 Sicherheit: Eingabe mit fremder Origin abgewiesen von ${req.ip || 'unbekannt'}: ${anfrageText(req)}`);
@@ -600,7 +615,7 @@ export function createSicherheitZweiterFaktorRouter(deps: ZweiterFaktorDeps): Ro
     next();
   };
 
-  const zugang = [kopf, nurWennKonfiguriert, deps.pageAuth, nurKonto];
+  const zugang = [kopf, seiteNurWennKonfiguriert(deps, TITEL_ZWEITER_FAKTOR), deps.pageAuth, seiteNurKonto(deps, TITEL_ZWEITER_FAKTOR)];
 
   /** Das Token der Session dieser Anfrage; pageAuth hat es gelesen und die Session geprüft. */
   const sitzungsToken = (req: Request): string => parseCookies(req)[SESSION_COOKIE];
@@ -689,5 +704,44 @@ export function createSicherheitZweiterFaktorRouter(deps: ZweiterFaktorDeps): Ro
   });
 
   router.use(behandleSeitenFehler);
+  return router;
+}
+
+// ─── Die Seite /sicherheit ───────────────────────────────────────
+//
+// Das Dashboard (services/sicherheit/seite.ts): ein Dokument ohne Daten, sein
+// Skript holt den Stand von GET /api/sicherheit/stand und schickt Aufträge per
+// fetch. Zugang wie bei den Nutzer-Endpunkten: Session eines Kontos aus
+// SICHERHEIT_NUTZER (ohne Session 302 zur Anmeldung, fremdes Konto 403, nie der
+// Master-Key) und bestätigter zweiter Faktor; ohne ihn 302 zur Bestätigung, die
+// danach mit 303 hierher zurückführt.
+
+export interface SicherheitSeiteDeps extends SicherheitKonfig {
+  /** Wie bei /teamboard: verlangt eine Session (sonst 302 zur Anmeldung) und setzt `res.locals.auth`. */
+  pageAuth: RequestHandler;
+  /** Dieselbe Prüfung wie bei den Nutzer-Endpunkten (`createZweiterFaktorPruefung`). */
+  zweiterFaktorBestaetigt: SicherheitDeps['zweiterFaktorBestaetigt'];
+}
+
+/** GET /sicherheit. Wie die übrigen Seiten ohne Pfad-Präfix zu mounten (next= braucht den vollen Pfad). */
+export function createSicherheitSeiteRouter(deps: SicherheitSeiteDeps): Router {
+  const router = Router();
+  const html = renderSicherheitSeite({ zweiterFaktorPfad: ZWEITER_FAKTOR_PFAD });
+
+  router.get(
+    '/sicherheit',
+    keinCache,
+    seiteNurWennKonfiguriert(deps, TITEL_SEITE),
+    deps.pageAuth,
+    seiteNurKonto(deps, TITEL_SEITE),
+    (req, res) => {
+      if (!deps.zweiterFaktorBestaetigt(req, res)) {
+        res.redirect(302, ZWEITER_FAKTOR_PFAD);
+        return;
+      }
+      res.type('html').send(html);
+    },
+  );
+
   return router;
 }

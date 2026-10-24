@@ -41,6 +41,7 @@ import { ZweiterFaktorStore } from './core/zweiter-faktor.js';
 import {
   createSicherheitDienstRouter,
   createSicherheitNutzerRouter,
+  createSicherheitSeiteRouter,
   createSicherheitZweiterFaktorRouter,
   createZweiterFaktorPruefung,
   fehlendeSicherheitKonfig,
@@ -323,6 +324,14 @@ app.use(createSicherheitZweiterFaktorRouter({
   ...sicherheitKonfig,
   store: zweiterFaktor,
   pageAuth: createPageAuth(sessions, '/app/'),
+}));
+// GET /sicherheit: das Dashboard. Dieselbe Prüfung des zweiten Faktors wie die API darunter (ohne ihn
+// 302 auf /sicherheit/zweiter-faktor), sonst wie die Seite des zweiten Faktors: ohne Session 302 zur
+// Anmeldung, fremdes Konto 403, nie der Master-Key. Die Daten holt die Seite selbst von /api/sicherheit.
+app.use(createSicherheitSeiteRouter({
+  ...sicherheitKonfig,
+  pageAuth: createPageAuth(sessions, '/app/'),
+  zweiterFaktorBestaetigt: sicherheitDeps.zweiterFaktorBestaetigt,
 }));
 
 // GET /teamboard (HTML-Seite, nur Session — kein Master-Key, das ist kein

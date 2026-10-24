@@ -13,6 +13,7 @@ export default defineConfig({
       '/api': 'http://localhost:3500',
       '/auth': 'http://localhost:3500',
       '/teamboard': 'http://localhost:3500',
+      '/sicherheit': 'http://localhost:3500',
     },
   },
 });
