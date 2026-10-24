@@ -94,7 +94,7 @@ export function renderEinrichten(a: { email: string; geheimnis: string; aktion: 
 <dt>Art</dt><dd>zeitbasiert, 6 Stellen, alle 30 Sekunden (SHA-1)</dd>
 <dt>Adresse</dt><dd><code id="otpauth">${h(otpauthAdresse(a.email, a.geheimnis))}</code></dd>
 </dl>
-<p class="leise">Den Schlüssel zeigt diese Seite nur, solange noch nichts eingerichtet ist. Groß- und Kleinschreibung und die Leerzeichen sind egal. Die Adresse ist für Apps, die sie als Text annehmen.</p>
+<p class="leise">Den Schlüssel zeigt diese Seite nur, solange noch nichts eingerichtet ist, und nur dieser Anmeldung: Öffnet jemand die Seite in einer anderen Anmeldung, bekommt er einen eigenen neuen Schlüssel, und dieser hier wird ungültig. Groß- und Kleinschreibung und die Leerzeichen sind egal. Die Adresse ist für Apps, die sie als Text annehmen.</p>
 ${meldungsAbsatz(a.meldung)}${formular(a.aktion, 'Einrichtung abschließen')}`);
 }
 

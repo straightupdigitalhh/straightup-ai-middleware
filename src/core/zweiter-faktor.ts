@@ -3,16 +3,27 @@ import { tokenHash } from './sessions.js';
 
 // ─── Zweiter Faktor: was gespeichert wird ────────────────────────
 //
-// Der TOTP-Schritt für /sicherheit hält zwei Dinge fest (Migration v6, core/db.ts):
+// Der TOTP-Schritt für /sicherheit hält drei Dinge fest (Migration v6, core/db.ts):
 //
 //  Je Konto (users): das eingerichtete Geheimnis, der Entwurf, den die
 //  Einrichtung gerade zeigt, und der Zeitschritt des zuletzt angenommenen
 //  Codes. Ein Code gilt nur einmal: angenommen wird nur ein Schritt, der
 //  größer ist als der gemerkte.
 //
+//  Der Entwurf gehört der Session, die ihn angelegt hat (ihr Token-Hash steht
+//  daneben). Nur diese Session sieht ihn wieder, und nur sie kann ihn mit einem
+//  Code zum Geheimnis machen. Ruft eine andere Session des Kontos die
+//  Einrichtung auf, bekommt sie einen neuen Entwurf, und der alte ist
+//  hinfällig. Wer das Passwort kennt und die Seite aufruft, bevor Jan fertig
+//  ist, sieht so nie den Schlüssel, den Jan in seine App tippt, und hat nach
+//  Jans Einrichtung keinen gültigen Code.
+//
 //  Je Session (sessions): bis wann sie als bestätigt gilt. Der Merker steht in
 //  der Zeile der Session. Wer die Session löscht (Abmelden, Passwortwechsel,
-//  Ablauf), beendet die Bestätigung deshalb mit.
+//  Ablauf), beendet die Bestätigung deshalb mit. Wer eine Einrichtung
+//  abschließt, löscht die Bestätigungen aller Sessions des Kontos und
+//  bestätigt nur die eigene: Bestätigungen aus der Zeit vor einem Zurücksetzen
+//  gehörten zum alten Geheimnis und leben nicht wieder auf.
 //
 // Die Geheimnisse liegen wie die Passwort-Hashes nur in dieser Datenbank. Die
 // Einrichtungsseite zeigt den Entwurf, solange nichts eingerichtet ist; danach
@@ -22,44 +33,71 @@ import { tokenHash } from './sessions.js';
 /** So lange gilt ein angenommener Code für die Session, höchstens bis zu ihrem Ablauf. */
 const ZWEITER_FAKTOR_GUELTIG_MS = 12 * 60 * 60 * 1000;
 
+/**
+ * Was `entwurfBereitstellen` getan hat: `angelegt` (es gab noch keinen),
+ * `ersetzt` (der Entwurf einer anderen Session ist hinfällig) oder null (der
+ * Entwurf dieser Session stand schon da, geschrieben wurde nichts).
+ */
+export type EntwurfEreignis = 'angelegt' | 'ersetzt' | null;
+
+interface NutzerZeile {
+  totp_geheimnis: string | null;
+  totp_entwurf: string | null;
+  totp_entwurf_session: string | null;
+}
+
 export class ZweiterFaktorStore {
   constructor(private db: DatabaseSync) {}
 
-  /** Das eingerichtete Geheimnis und den Entwurf des Kontos (Base32), je null, wenn es keins gibt. */
-  zustand(userId: string): { geheimnis: string | null; entwurf: string | null } {
-    const row = this.db.prepare('SELECT totp_geheimnis, totp_entwurf FROM users WHERE id = ?')
-      .get(userId) as { totp_geheimnis: string | null; totp_entwurf: string | null } | undefined;
-    return { geheimnis: row?.totp_geheimnis ?? null, entwurf: row?.totp_entwurf ?? null };
+  private zeile(userId: string): NutzerZeile | undefined {
+    return this.db.prepare('SELECT totp_geheimnis, totp_entwurf, totp_entwurf_session FROM users WHERE id = ?')
+      .get(userId) as NutzerZeile | undefined;
   }
 
   /**
-   * Der Entwurf, den die Einrichtung zeigt. Ein vorhandener bleibt, er wird nie
-   * überschrieben (die App und die Seite sollen dasselbe Geheimnis haben);
-   * gibt es keinen, wird `neu` der Entwurf. Ist schon ein Geheimnis
-   * eingerichtet, gibt es keinen Entwurf: null.
+   * Das eingerichtete Geheimnis des Kontos und den Entwurf dieser Session
+   * (Base32), je null, wenn es keins gibt. Der Entwurf einer anderen Session
+   * zählt hier nicht: er gehört ihr.
    */
-  entwurfBereitstellen(userId: string, neu: string): string | null {
-    this.db.prepare(
-      'UPDATE users SET totp_entwurf = ? WHERE id = ? AND totp_geheimnis IS NULL AND totp_entwurf IS NULL',
-    ).run(neu, userId);
-    const { geheimnis, entwurf } = this.zustand(userId);
-    return geheimnis === null ? entwurf : null;
+  zustand(userId: string, token: string): { geheimnis: string | null; entwurf: string | null } {
+    const row = this.zeile(userId);
+    const eigener = row?.totp_entwurf_session === tokenHash(token);
+    return { geheimnis: row?.totp_geheimnis ?? null, entwurf: eigener ? (row?.totp_entwurf ?? null) : null };
   }
 
   /**
-   * Schließt die Einrichtung ab, nachdem ein Code zum Entwurf gestimmt hat: der
-   * Entwurf wird das Geheimnis, der Schritt des Codes wird gemerkt (der Code
-   * ist damit verbraucht) und die Session gilt als bestätigt. Alles oder
-   * nichts. false, wenn es inzwischen ein Geheimnis gibt oder der Entwurf ein
-   * anderer ist als der, gegen den der Code geprüft wurde.
+   * Der Entwurf, den die Einrichtung dieser Session zeigt. Hat die Session
+   * schon einen, bleibt er und es wird nichts geschrieben. Sonst wird `neu` ihr
+   * Entwurf, und ein vorhandener Entwurf einer anderen Session ist damit
+   * hinfällig (`ereignis` sagt, was geschah, damit der Aufrufer es protokollieren
+   * kann). Ist schon ein Geheimnis eingerichtet, gibt es keinen Entwurf: null.
+   */
+  entwurfBereitstellen(userId: string, token: string, neu: string): { entwurf: string; ereignis: EntwurfEreignis } | null {
+    const row = this.zeile(userId);
+    if (!row || row.totp_geheimnis !== null) return null;
+    const hash = tokenHash(token);
+    if (row.totp_entwurf !== null && row.totp_entwurf_session === hash) return { entwurf: row.totp_entwurf, ereignis: null };
+    this.db.prepare('UPDATE users SET totp_entwurf = ?, totp_entwurf_session = ? WHERE id = ?').run(neu, hash, userId);
+    return { entwurf: neu, ereignis: row.totp_entwurf === null ? 'angelegt' : 'ersetzt' };
+  }
+
+  /**
+   * Schließt die Einrichtung ab, nachdem ein Code zum Entwurf dieser Session
+   * gestimmt hat: der Entwurf wird das Geheimnis, der Schritt des Codes wird
+   * gemerkt (der Code ist damit verbraucht), die Bestätigungen aller Sessions
+   * des Kontos enden, und nur diese Session gilt als bestätigt. Alles oder
+   * nichts. false, wenn es inzwischen ein Geheimnis gibt, der Entwurf ein
+   * anderer ist als der geprüfte oder er einer anderen Session gehört.
    */
   richteEin(userId: string, token: string, entwurf: string, schritt: number, jetzt: Date): boolean {
     return this.alsEinheit(() => {
       const ergebnis = this.db.prepare(
-        `UPDATE users SET totp_geheimnis = totp_entwurf, totp_entwurf = NULL, totp_letzter_schritt = ?
-         WHERE id = ? AND totp_geheimnis IS NULL AND totp_entwurf = ?`,
-      ).run(schritt, userId, entwurf);
-      return Number(ergebnis.changes) > 0 && this.bestaetigeSession(token, jetzt);
+        `UPDATE users SET totp_geheimnis = totp_entwurf, totp_entwurf = NULL, totp_entwurf_session = NULL, totp_letzter_schritt = ?
+         WHERE id = ? AND totp_geheimnis IS NULL AND totp_entwurf = ? AND totp_entwurf_session = ?`,
+      ).run(schritt, userId, entwurf, tokenHash(token));
+      if (Number(ergebnis.changes) === 0) return false;
+      this.db.prepare('UPDATE sessions SET zweiter_faktor_bis = NULL WHERE user_id = ?').run(userId);
+      return this.bestaetigeSession(token, jetzt);
     });
   }
 

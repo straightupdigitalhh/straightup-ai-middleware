@@ -113,7 +113,7 @@ async function makeApp(aufbau: Aufbau = {}) {
     const { token } = sessions.create(user.id);
     // Die Session läuft in echter Zeit ab, die Uhr der Tests steht fest: damit das Datum des Rechners nichts ausmacht, gilt sie "für immer".
     db.prepare('UPDATE sessions SET expires_at = ? WHERE token_hash = ?')
-      .run('2099-12-31T23:59:59.000Z', createHash('sha256').update(token).digest('hex'));
+      .run('2099-12-31T23:59:59.000Z', sitzungsHash(token));
     return { cookie: `${SESSION_COOKIE}=${token}`, token };
   }
   /** Ein Konto mit schon eingerichtetem zweiten Faktor (festes Geheimnis) und einer neuen, noch unbestätigten Session. */
@@ -122,10 +122,11 @@ async function makeApp(aufbau: Aufbau = {}) {
     db.prepare('UPDATE users SET totp_geheimnis = ? WHERE email = ?').run(geheimnis, email);
     return { ...sitzung, geheimnis };
   }
-  /** Ein Konto mitten in der Einrichtung: der Entwurf steht fest, die Seite zeigt ihn dann wieder. */
+  /** Ein Konto mitten in der Einrichtung: der Entwurf steht fest und gehört der neuen Session, die Seite zeigt ihn ihr dann wieder. */
   function mitEntwurf(email: string, entwurf = FEST[email]) {
     const sitzung = anmelden(email);
-    db.prepare('UPDATE users SET totp_entwurf = ? WHERE email = ?').run(entwurf, email);
+    db.prepare('UPDATE users SET totp_entwurf = ?, totp_entwurf_session = ? WHERE email = ?')
+      .run(entwurf, sitzungsHash(sitzung.token), email);
     return { ...sitzung, geheimnis: entwurf };
   }
   const weiter = (ms: number) => { uhr.jetzt = new Date(uhr.jetzt.getTime() + ms); };
@@ -183,10 +184,19 @@ const nutzerZeile = (db: DatabaseSync, email: string) => ({
   ...(db.prepare('SELECT totp_geheimnis, totp_entwurf, totp_letzter_schritt FROM users WHERE email = ?').get(email) as object),
 }) as { totp_geheimnis: string | null; totp_entwurf: string | null; totp_letzter_schritt: number | null };
 
-/** zweiter_faktor_bis der Session; der Hash wird hier unabhängig vom Quelltext gebildet. */
+/** Der Token-Hash der Session, der der Entwurf des Kontos gehört (null: keinem). */
+const entwurfSession = (db: DatabaseSync, email: string): string | null =>
+  (db.prepare('SELECT totp_entwurf_session FROM users WHERE email = ?').get(email) as { totp_entwurf_session: string | null }).totp_entwurf_session;
+
+/** Der Hash, unter dem der SessionStore ein Token ablegt (hier unabhängig vom Quelltext gebildet). */
+function sitzungsHash(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+/** zweiter_faktor_bis der Session. */
 const bestaetigtBis = (db: DatabaseSync, token: string): string | null =>
   (db.prepare('SELECT zweiter_faktor_bis FROM sessions WHERE token_hash = ?')
-    .get(createHash('sha256').update(token).digest('hex')) as { zweiter_faktor_bis: string | null }).zweiter_faktor_bis;
+    .get(sitzungsHash(token)) as { zweiter_faktor_bis: string | null }).zweiter_faktor_bis;
 
 const schrittVon = (zeitMs: number) => Math.floor(zeitMs / SCHRITT);
 
@@ -214,7 +224,7 @@ afterEach(async () => {
 describe('Einrichten', () => {
   it('einrichten_zeigt_geheimnis_und_adresse: ohne Geheimnis zeigt die Seite einen neuen Schlüssel in Vierergruppen und die otpauth-Adresse zum Abtippen', async () => {
     const { app, db, anmelden } = await makeApp();
-    const { cookie } = anmelden(JAN);
+    const { cookie, token } = anmelden(JAN);
     const res = await seite(app, cookie);
 
     expect(res.status).toBe(200);
@@ -229,18 +239,81 @@ describe('Einrichten', () => {
     expect(res.text).toContain('name="code"');
     // Der Server hat das Geheimnis als Entwurf abgelegt, eingerichtet ist noch nichts
     expect(nutzerZeile(db, JAN)).toEqual({ totp_geheimnis: null, totp_entwurf: geheimnis, totp_letzter_schritt: null });
+    // Der Entwurf gehört der Session, die die Seite aufgerufen hat, und die Anlage steht im Log
+    expect(entwurfSession(db, JAN)).toBe(sitzungsHash(token));
+    expect(protokoll.join('\n')).toMatch(/Entwurf angelegt für jan@example\.test von \S+/);
   });
 
-  it('einrichten_zeigt_denselben_entwurf_wieder: bei jedem Aufruf, in jeder Session des Kontos; ein anderes Konto bekommt einen anderen', async () => {
-    const { app, anmelden } = await makeApp();
-    const erste = geheimnisAusSeite((await seite(app, anmelden(JAN).cookie)).text);
-    const zweite = geheimnisAusSeite((await seite(app, anmelden(JAN).cookie)).text);
-    const dritte = geheimnisAusSeite((await seite(app, anmelden(JAN).cookie)).text);
-    expect(erste).toMatch(/^[A-Z2-7]{32}$/);
-    expect([zweite, dritte]).toEqual([erste, erste]);
-    const gabi = geheimnisAusSeite((await seite(app, anmelden(GABI).cookie)).text);
-    expect(gabi).toMatch(/^[A-Z2-7]{32}$/);
-    expect(gabi).not.toBe(erste);
+  it('entwurf_gehoert_der_session: dieselbe Session sieht ihren Entwurf wieder, jede andere Session des Kontos bekommt einen neuen und macht den alten hinfällig; jede Anlage steht mit Konto und IP im Log, nie der Schlüssel', async () => {
+    const ctx = await makeApp({ trustProxy: true });
+    const { app, db } = ctx;
+    const s1 = ctx.anmelden(JAN);
+    const s2 = ctx.anmelden(JAN);
+    const von = (ip: string) => ({ 'X-Forwarded-For': ip });
+
+    const k1 = geheimnisAusSeite((await seite(app, s1.cookie).set(von('203.0.113.7'))).text);
+    const wieder = geheimnisAusSeite((await seite(app, s1.cookie).set(von('203.0.113.7'))).text);
+    expect(k1).toMatch(/^[A-Z2-7]{32}$/);
+    expect(wieder).toBe(k1); // dieselbe Session: derselbe Entwurf
+    expect(entwurfSession(db, JAN)).toBe(sitzungsHash(s1.token));
+
+    const k2 = geheimnisAusSeite((await seite(app, s2.cookie).set(von('198.51.100.9'))).text);
+    expect(k2).toMatch(/^[A-Z2-7]{32}$/);
+    expect(k2).not.toBe(k1); // eine andere Session sieht den Schlüssel der ersten nie
+    expect(nutzerZeile(db, JAN).totp_entwurf).toBe(k2); // und der alte ist hinfällig
+    expect(entwurfSession(db, JAN)).toBe(sitzungsHash(s2.token));
+
+    // Der Code der ersten Session zu ihrem alten Schlüssel richtet nichts mehr ein: sie bekommt einen neuen
+    const alt = await eingabe(app, s1.cookie, totpCode(k1, START.getTime()), { kopf: von('203.0.113.7') });
+    expect(alt.status).toBe(400);
+    expect(alt.text).toContain('Lege zuerst den Eintrag in der App an');
+    const k3 = geheimnisAusSeite(alt.text);
+    expect([k3 === k1, k3 === k2]).toEqual([false, false]);
+    expect(nutzerZeile(db, JAN)).toMatchObject({ totp_geheimnis: null, totp_entwurf: k3 });
+    expect(entwurfSession(db, JAN)).toBe(sitzungsHash(s1.token));
+    expect((await api(app, s1.cookie)).status).toBe(403);
+
+    // Auch der Code der zweiten Session zu ihrem inzwischen ersetzten Schlüssel nützt nichts
+    const zweiter = await eingabe(app, s2.cookie, totpCode(k2, START.getTime()), { kopf: von('198.51.100.9') });
+    expect(zweiter.status).toBe(400);
+    const k4 = geheimnisAusSeite(zweiter.text);
+    expect(nutzerZeile(db, JAN)).toMatchObject({ totp_geheimnis: null, totp_entwurf: k4 });
+
+    const log = protokoll.join('\n');
+    expect(log).toContain('Entwurf angelegt für jan@example.test von 203.0.113.7');
+    expect(log).toContain('Entwurf ersetzt für jan@example.test von 198.51.100.9');
+    expect(log.match(/Entwurf angelegt/g)).toHaveLength(1); // nur die erste Anlage; jede weitere ersetzt einen vorhandenen
+    expect(log.match(/Entwurf ersetzt/g)).toHaveLength(3); // s2 beim Anzeigen, s1 und s2 beim Absenden ohne eigenen Entwurf
+    for (const geheim of [k1, k2, k3, k4, vierergruppen(k1), vierergruppen(k2), vierergruppen(k3), vierergruppen(k4)]) expect(log).not.toContain(geheim);
+  });
+
+  it('schluessel_einer_fremden_session_bleibt_wertlos: wer die Seite vor Jans Einrichtung aufruft, sieht nie Jans Schlüssel, und sein eigener nützt nach Jans Einrichtung nichts', async () => {
+    const ctx = await makeApp();
+    const { app, db } = ctx;
+    const jan = ctx.anmelden(JAN);
+    const fremd = ctx.anmelden(JAN); // jemand, der Jans Passwort kennt
+
+    // Jan öffnet die Einrichtung und tippt den Schlüssel in seine App
+    const kJan = geheimnisAusSeite((await seite(app, jan.cookie)).text);
+    // Der andere ruft die Seite danach auf: er sieht nicht Jans Schlüssel, bekommt einen eigenen, und Jans ist damit hinfällig
+    const kFremd = geheimnisAusSeite((await seite(app, fremd.cookie)).text);
+    expect(kFremd).not.toBe(kJan);
+
+    // Jans erster Code scheitert; die Seite zeigt Jan einen neuen Schlüssel (der des anderen ist damit auch hinfällig)
+    const versuch = await eingabe(app, jan.cookie, totpCode(kJan, START.getTime()));
+    expect(versuch.status).toBe(400);
+    const kJan2 = geheimnisAusSeite(versuch.text);
+    expect([kJan2 === kJan, kJan2 === kFremd]).toEqual([false, false]);
+
+    // Jan richtet mit dem neuen Schlüssel ein ...
+    expect((await eingabe(app, jan.cookie, totpCode(kJan2, START.getTime()))).status).toBe(303);
+    expect(nutzerZeile(db, JAN).totp_geheimnis).toBe(kJan2);
+
+    // ... und die Codes des anderen zu dem Schlüssel, den er gesehen hat, öffnen nichts
+    ctx.weiter(SCHRITT);
+    for (let i = 0; i < 5 && pruefeTotp(kJan2, ctx.code(kFremd), ctx.uhr.jetzt.getTime()); i++) ctx.weiter(SCHRITT); // zufällig auch gültige Codes (1 zu 333 000) überspringen
+    expect((await eingabe(app, fremd.cookie, ctx.code(kFremd))).status).toBe(401);
+    expect((await api(app, fremd.cookie)).status).toBe(403);
   });
 
   it('einrichten_speichert_erst_nach_richtigem_code: ein falscher Code ändert nichts, der richtige macht den Entwurf zum Geheimnis und bestätigt die Session gleich mit', async () => {
@@ -259,8 +332,10 @@ describe('Einrichten', () => {
     expect((await api(app, s.cookie)).status).toBe(403);
 
     // richtiger Code: der Entwurf wird zum Geheimnis, der Entwurf verschwindet
+    expect(entwurfSession(db, JAN)).toBe(sitzungsHash(s.token));
     const richtig = await eingabe(app, s.cookie, ctx.code(GEHEIMNIS_JAN));
     expect(richtig.status).toBe(303);
+    expect(entwurfSession(db, JAN)).toBeNull();
     expect(richtig.headers.location).toBe('/sicherheit');
     expect(nutzerZeile(db, JAN)).toEqual({
       totp_geheimnis: GEHEIMNIS_JAN,
@@ -285,10 +360,12 @@ describe('Einrichten', () => {
     expect(nutzerZeile(db, JAN).totp_entwurf).toBeNull();
   });
 
-  it('einrichten_nur_ohne_geheimnis (Rest): ein übrig gebliebener Entwurf wird weder gezeigt noch angenommen, das Geheimnis bleibt', async () => {
+  it('einrichten_nur_ohne_geheimnis (Rest): ein übrig gebliebener Entwurf, auch einer der eigenen Session, wird weder gezeigt noch angenommen, das Geheimnis bleibt', async () => {
     const { app, db, mitFaktor, code } = await makeApp();
     const s = mitFaktor(JAN);
-    db.prepare('UPDATE users SET totp_entwurf = ? WHERE email = ?').run(ANGREIFER, JAN);
+    // Diesen Zustand gibt es im Betrieb nicht (die Einrichtung räumt den Entwurf ab); hier wird er von Hand gebaut:
+    // ein Entwurf, der der Session gehört, die gleich Codes einreicht
+    db.prepare('UPDATE users SET totp_entwurf = ?, totp_entwurf_session = ? WHERE email = ?').run(ANGREIFER, sitzungsHash(s.token), JAN);
 
     const res = await seite(app, s.cookie);
     expect(res.text).not.toContain(ANGREIFER);
@@ -418,7 +495,7 @@ describe('Code eingeben', () => {
     expect((await eingabe(app, s.cookie, ctx.code(GEHEIMNIS_JAN))).status).toBe(303);
   });
 
-  it('code_zweimal_wird_abgelehnt: derselbe Code gilt nicht noch einmal, weder in der Session noch in einer anderen; der nächste Code geht', async () => {
+  it('code_zweimal_wird_abgelehnt: derselbe Code gilt in keiner anderen Session noch einmal, auch der Schritt davor nicht; der nächste Code geht', async () => {
     const ctx = await makeApp();
     const { app } = ctx;
     const a = ctx.mitFaktor(JAN);
@@ -426,7 +503,6 @@ describe('Code eingeben', () => {
     const code = ctx.code(GEHEIMNIS_JAN);
 
     expect((await eingabe(app, a.cookie, code)).status).toBe(303);
-    expect((await eingabe(app, a.cookie, code)).status).toBe(401); // dieselbe Session
     const andere = await eingabe(app, b.cookie, code); // eine andere Anmeldung desselben Kontos
     expect(andere.status).toBe(401);
     expect((await api(app, b.cookie)).status).toBe(403);
@@ -435,6 +511,40 @@ describe('Code eingeben', () => {
     expect((await eingabe(app, b.cookie, ctx.code(GEHEIMNIS_JAN, -SCHRITT))).status).toBe(401);
     expect((await eingabe(app, b.cookie, ctx.code(GEHEIMNIS_JAN, SCHRITT))).status).toBe(303); // Fenster +30 s
     expect((await api(app, b.cookie)).status).toBe(200);
+  });
+
+  it('zweites_absenden_nach_der_bestaetigung_ist_kein_fehlversuch: eine schon bestätigte Session wird weitergeleitet (Doppelklick, Neuladen), es wird nichts geprüft und nichts gezählt', async () => {
+    const ctx = await makeApp();
+    const { app } = ctx;
+    const a = ctx.mitFaktor(JAN);
+    const code = ctx.code(GEHEIMNIS_JAN);
+    expect((await eingabe(app, a.cookie, code)).status).toBe(303);
+
+    // dieselbe Eingabe noch einmal, öfter als die Sperre Fehlversuche erlaubt
+    for (let i = 0; i < 8; i++) {
+      const nochmal = await eingabe(app, a.cookie, code);
+      expect([nochmal.status, nochmal.headers.location]).toEqual([303, '/sicherheit']);
+    }
+    // bestätigt ist bestätigt: auch ein anderer Code wird nicht geprüft
+    expect((await eingabe(app, a.cookie, falscherCode(GEHEIMNIS_JAN, START.getTime()))).status).toBe(303);
+    expect(protokoll.join('\n')).not.toContain('falscher Code');
+
+    // Gezählt wurde nichts: eine andere Anmeldung desselben Kontos ist nicht gesperrt
+    const b = ctx.anmelden(JAN);
+    expect((await eingabe(app, b.cookie, ctx.code(GEHEIMNIS_JAN, SCHRITT))).status).toBe(303);
+    expect((await api(app, b.cookie)).status).toBe(200);
+  });
+
+  it('zweites_absenden_nach_der_einrichtung_ist_kein_fehlversuch: auch beim ersten Code der Einrichtung führt ein zweites Absenden nicht in die Fehlerseite', async () => {
+    const ctx = await makeApp();
+    const { app, db } = ctx;
+    const s = ctx.mitEntwurf(JAN);
+    await seite(app, s.cookie);
+    const code = ctx.code(GEHEIMNIS_JAN);
+    expect((await eingabe(app, s.cookie, code)).status).toBe(303);
+    for (let i = 0; i < 6; i++) expect((await eingabe(app, s.cookie, code)).status).toBe(303);
+    expect(nutzerZeile(db, JAN)).toMatchObject({ totp_geheimnis: GEHEIMNIS_JAN, totp_entwurf: null });
+    expect(protokoll.join('\n')).not.toContain('falscher Code');
   });
 
   it('code_aus_dem_nachbarschritt_gilt: eine Uhr, die 30 s vor oder nach der App geht, stört nicht; 60 s sind zu viel', async () => {
@@ -562,6 +672,33 @@ describe('Gültigkeit der Bestätigung', () => {
     const res = await api(app, s.cookie);
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('zweiter_faktor_fehlt');
+  });
+
+  it('neu_einrichten_in_anderer_session_oeffnet_alte_sessions_nicht: die Bestätigungen von vor dem Zurücksetzen leben nicht wieder auf, wenn irgendeine Session neu einrichtet', async () => {
+    const ctx = await makeApp();
+    const { app, db } = ctx;
+    const s1 = ctx.mitFaktor(JAN);
+    expect((await eingabe(app, s1.cookie, ctx.code(GEHEIMNIS_JAN))).status).toBe(303);
+    expect((await api(app, s1.cookie)).status).toBe(200);
+
+    db.prepare('UPDATE users SET totp_geheimnis = NULL WHERE email = ?').run(JAN); // Zurücksetzen
+    expect((await api(app, s1.cookie)).status).toBe(403);
+
+    // Eine andere Session richtet ein neues Geheimnis ein
+    const s2 = ctx.anmelden(JAN);
+    const neu = geheimnisAusSeite((await seite(app, s2.cookie)).text);
+    expect((await eingabe(app, s2.cookie, ctx.code(neu))).status).toBe(303);
+    expect((await api(app, s2.cookie)).status).toBe(200);
+
+    // Die erste Session war vor dem Zurücksetzen bestätigt. Das gilt nicht wieder, auch wenn ihr "bestätigt bis" noch in der Zukunft liegt.
+    expect((await api(app, s1.cookie)).status).toBe(403);
+    expect(bestaetigtBis(db, s1.token)).toBeNull();
+
+    // Sie muss selbst einen Code eingeben (den nächsten Schritt: der der Einrichtung ist verbraucht)
+    ctx.weiter(SCHRITT);
+    expect((await eingabe(app, s1.cookie, ctx.code(neu))).status).toBe(303);
+    expect((await api(app, s1.cookie)).status).toBe(200);
+    expect((await api(app, s2.cookie)).status).toBe(200); // die einrichtende Session bleibt bestätigt
   });
 });
 
@@ -823,10 +960,42 @@ describe('Die Seiten selbst', () => {
     }
   });
 
+  it('die_seite_schreibt_nur_beim_anlegen_eines_entwurfs: erneutes Anzeigen, Fehlerseiten und die Eingabeseite lösen keine Schreibanweisung aus', async () => {
+    const ctx = await makeApp();
+    const { app, db } = ctx;
+    const neu = ctx.anmelden(JAN); // Konto ohne Geheimnis
+    const eingerichtet = ctx.mitFaktor(GABI); // Konto mit Geheimnis
+    const prepare = vi.spyOn(db, 'prepare');
+    const exec = vi.spyOn(db, 'exec');
+    const marke = () => ({ prepare: prepare.mock.calls.length, exec: exec.mock.calls.length });
+    /** Alle Anweisungen seit der Marke, die etwas ändern oder eine Transaktion beginnen könnten. */
+    const schreibend = (seit: { prepare: number; exec: number }) =>
+      [...prepare.mock.calls.slice(seit.prepare), ...exec.mock.calls.slice(seit.exec)]
+        .map(([text]) => String(text))
+        .filter((text) => /^\s*(BEGIN|UPDATE|INSERT|DELETE|REPLACE)\b/i.test(text));
+
+    // Das Anlegen eines Entwurfs schreibt (Gegenprobe) ...
+    let von = marke();
+    const gezeigt = await seite(app, neu.cookie);
+    expect(schreibend(von).filter((text) => /totp_entwurf/.test(text))).toHaveLength(1);
+    const entwurf = geheimnisAusSeite(gezeigt.text);
+
+    // ... alles danach schreibt nicht
+    von = marke();
+    expect((await seite(app, neu.cookie)).status).toBe(200); // dieselbe Session, der Schlüssel erneut angezeigt
+    expect((await eingabe(app, neu.cookie, falscherCode(entwurf, START.getTime()))).status).toBe(401); // Fehlerseite mit Schlüssel
+    expect((await eingabe(app, neu.cookie, 'x')).status).toBe(400); // Fehlerseite für Eingaben ohne Code
+    expect((await seite(app, eingerichtet.cookie)).status).toBe(200); // Eingabeseite eines eingerichteten Kontos
+    expect((await eingabe(app, eingerichtet.cookie, falscherCode(GEHEIMNIS_GABI, START.getTime()))).status).toBe(401);
+    expect((await eingabe(app, eingerichtet.cookie, 'x')).status).toBe(400);
+    expect(schreibend(von)).toEqual([]);
+    expect(prepare.mock.calls.length).toBeGreaterThan(von.prepare); // Gegenprobe: gelesen wurde
+  });
+
   it('unerwarteter_fehler_500_ohne_details: die Seite sagt es allgemein und ohne Aufrufstapel, das Log nennt die Meldung', async () => {
     const ctx = await makeApp();
     const s = ctx.mitFaktor(JAN);
-    vi.spyOn(ctx.store, 'zustand').mockImplementation(() => { throw new Error('Datenbank nicht erreichbar'); });
+    vi.spyOn(ctx.store, 'entwurfBereitstellen').mockImplementation(() => { throw new Error('Datenbank nicht erreichbar'); });
 
     const res = await seite(ctx.app, s.cookie);
     expect(res.status).toBe(500);
@@ -976,38 +1145,75 @@ describe('Speicher und Prüffunktion', () => {
     expect(nutzerZeile(db, JAN).totp_letzter_schritt).toBe(6);
   });
 
-  it('store_richte_ein_ist_alles_oder_nichts: nur mit dem Entwurf, der geprüft wurde, nur ohne Geheimnis, nur mit bekannter Session', async () => {
+  it('store_richte_ein_ist_alles_oder_nichts: nur mit dem geprüften Entwurf, nur für die Session, der er gehört, nur ohne Geheimnis; bei jedem Fehlschlag bleibt alles, wie es war', async () => {
     const { store, db, users, anmelden } = await makeApp();
     const s = anmelden(JAN);
+    const anderer = anmelden(JAN);
+    const dritter = anmelden(JAN);
     const id = users.findByEmail(JAN)!.id;
+    // Zwei Sessions des Kontos sind von früher bestätigt (zum Beispiel vor einem Zurücksetzen)
+    const frueher = '2030-01-01T00:00:00.000Z';
+    db.prepare('UPDATE sessions SET zweiter_faktor_bis = ? WHERE token_hash IN (?, ?)').run(frueher, sitzungsHash(anderer.token), sitzungsHash(dritter.token));
 
     expect(store.richteEin(id, s.token, GEHEIMNIS_JAN, 7, START)).toBe(false); // es gibt keinen Entwurf
-    db.prepare('UPDATE users SET totp_entwurf = ? WHERE email = ?').run(GEHEIMNIS_JAN, JAN);
+    expect(store.entwurfBereitstellen(id, s.token, GEHEIMNIS_JAN)).toEqual({ entwurf: GEHEIMNIS_JAN, ereignis: 'angelegt' });
     expect(store.richteEin(id, s.token, ANGREIFER, 7, START)).toBe(false); // der Entwurf ist ein anderer als der geprüfte
+    expect(store.richteEin(id, anderer.token, GEHEIMNIS_JAN, 7, START)).toBe(false); // der Entwurf gehört einer anderen Session
     expect(store.richteEin(id, 'gibt-es-nicht', GEHEIMNIS_JAN, 7, START)).toBe(false); // unbekannte Session
     expect(nutzerZeile(db, JAN)).toEqual({ totp_geheimnis: null, totp_entwurf: GEHEIMNIS_JAN, totp_letzter_schritt: null });
+    expect(bestaetigtBis(db, anderer.token)).toBe(frueher);
 
+    // Gehört der Entwurf einer Session, die es nicht (mehr) gibt, scheitert das Bestätigen, und mit ihm wird alles zurückgenommen:
+    // der Entwurf bleibt, auch die Bestätigungen der anderen Sessions werden nicht gelöscht
+    expect(store.entwurfBereitstellen(id, 'geloeschte-session', ANGREIFER)).toEqual({ entwurf: ANGREIFER, ereignis: 'ersetzt' });
+    expect(store.richteEin(id, 'geloeschte-session', ANGREIFER, 7, START)).toBe(false);
+    expect(nutzerZeile(db, JAN)).toEqual({ totp_geheimnis: null, totp_entwurf: ANGREIFER, totp_letzter_schritt: null });
+    expect(entwurfSession(db, JAN)).toBe(sitzungsHash('geloeschte-session'));
+    expect(bestaetigtBis(db, anderer.token)).toBe(frueher);
+    expect(bestaetigtBis(db, dritter.token)).toBe(frueher);
+
+    // Der Erfolg: Geheimnis gesetzt, Entwurf samt Besitzer weg, Schritt gemerkt, alle früheren Bestätigungen des Kontos gelöscht,
+    // nur die einrichtende Session ist bestätigt
+    expect(store.entwurfBereitstellen(id, s.token, GEHEIMNIS_JAN)).toEqual({ entwurf: GEHEIMNIS_JAN, ereignis: 'ersetzt' });
     expect(store.richteEin(id, s.token, GEHEIMNIS_JAN, 7, START)).toBe(true);
     expect(nutzerZeile(db, JAN)).toEqual({ totp_geheimnis: GEHEIMNIS_JAN, totp_entwurf: null, totp_letzter_schritt: 7 });
+    expect(entwurfSession(db, JAN)).toBeNull();
     expect(bestaetigtBis(db, s.token)).toBe(new Date(START.getTime() + ZWOELF_STUNDEN).toISOString());
-    db.prepare('UPDATE users SET totp_entwurf = ? WHERE email = ?').run(ANGREIFER, JAN);
-    expect(store.richteEin(id, s.token, ANGREIFER, 9, START)).toBe(false); // ein eingerichtetes Geheimnis wird nie ersetzt
+    expect(bestaetigtBis(db, anderer.token)).toBeNull();
+    expect(bestaetigtBis(db, dritter.token)).toBeNull();
+
+    // Ein eingerichtetes Geheimnis wird nie ersetzt, auch nicht mit einem Entwurf, den es gar nicht mehr geben dürfte
+    db.prepare('UPDATE users SET totp_entwurf = ?, totp_entwurf_session = ? WHERE email = ?').run(ANGREIFER, sitzungsHash(s.token), JAN);
+    expect(store.richteEin(id, s.token, ANGREIFER, 9, START)).toBe(false);
     expect(nutzerZeile(db, JAN)).toMatchObject({ totp_geheimnis: GEHEIMNIS_JAN, totp_letzter_schritt: 7 });
   });
 
-  it('store_entwurf_bereitstellen: legt einen an, behält den vorhandenen, und nach der Einrichtung gibt es keinen mehr', async () => {
+  it('store_entwurf_bereitstellen: der Entwurf gehört der Session, die ihn angelegt hat; jede andere ersetzt ihn; nach der Einrichtung gibt es keinen mehr', async () => {
     const { store, db, users, anmelden } = await makeApp();
-    anmelden(JAN);
+    const s1 = anmelden(JAN);
+    const s2 = anmelden(JAN);
     const id = users.findByEmail(JAN)!.id;
 
-    expect(store.entwurfBereitstellen(id, GEHEIMNIS_JAN)).toBe(GEHEIMNIS_JAN);
-    expect(store.entwurfBereitstellen(id, ANGREIFER)).toBe(GEHEIMNIS_JAN); // der vorhandene bleibt
-    expect(store.zustand(id)).toEqual({ geheimnis: null, entwurf: GEHEIMNIS_JAN });
+    expect(store.entwurfBereitstellen(id, s1.token, GEHEIMNIS_JAN)).toEqual({ entwurf: GEHEIMNIS_JAN, ereignis: 'angelegt' });
+    expect(store.entwurfBereitstellen(id, s1.token, ANGREIFER)).toEqual({ entwurf: GEHEIMNIS_JAN, ereignis: null }); // der eigene bleibt
+    expect(store.zustand(id, s1.token)).toEqual({ geheimnis: null, entwurf: GEHEIMNIS_JAN });
+    expect(store.zustand(id, s2.token)).toEqual({ geheimnis: null, entwurf: null }); // der Entwurf der ersten Session gehört nicht der zweiten
 
-    db.prepare('UPDATE users SET totp_geheimnis = ?, totp_entwurf = NULL WHERE email = ?').run(GEHEIMNIS_GABI, JAN);
-    expect(store.entwurfBereitstellen(id, ANGREIFER)).toBeNull(); // eingerichtet: kein Entwurf
+    expect(store.entwurfBereitstellen(id, s2.token, ANGREIFER)).toEqual({ entwurf: ANGREIFER, ereignis: 'ersetzt' });
+    expect(store.zustand(id, s1.token)).toEqual({ geheimnis: null, entwurf: null }); // der alte ist hinfällig
+    expect(store.zustand(id, s2.token)).toEqual({ geheimnis: null, entwurf: ANGREIFER });
+
+    // Ein Entwurf ohne Besitzer (von Hand gesetzt) gehört keiner Session und wird ersetzt
+    db.prepare('UPDATE users SET totp_entwurf = ?, totp_entwurf_session = NULL WHERE email = ?').run(GEHEIMNIS_GABI, JAN);
+    expect(store.zustand(id, s1.token).entwurf).toBeNull();
+    expect(store.entwurfBereitstellen(id, s1.token, GEHEIMNIS_JAN)).toEqual({ entwurf: GEHEIMNIS_JAN, ereignis: 'ersetzt' });
+
+    db.prepare('UPDATE users SET totp_geheimnis = ?, totp_entwurf = NULL, totp_entwurf_session = NULL WHERE email = ?').run(GEHEIMNIS_GABI, JAN);
+    expect(store.entwurfBereitstellen(id, s1.token, ANGREIFER)).toBeNull(); // eingerichtet: kein Entwurf
     expect(nutzerZeile(db, JAN).totp_entwurf).toBeNull();
-    expect(store.zustand('gibt-es-nicht')).toEqual({ geheimnis: null, entwurf: null });
+    expect(entwurfSession(db, JAN)).toBeNull();
+    expect(store.zustand(id, s1.token)).toEqual({ geheimnis: GEHEIMNIS_GABI, entwurf: null });
+    expect(store.zustand('gibt-es-nicht', s1.token)).toEqual({ geheimnis: null, entwurf: null });
   });
 
   it('neue_session_ist_unbestaetigt: eine Anmeldung ohne Code hat zweiter_faktor_bis NULL', async () => {

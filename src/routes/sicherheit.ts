@@ -492,10 +492,13 @@ export function createSicherheitNutzerRouter(deps: SicherheitDeps): Router {
 //
 // GET /sicherheit/zweiter-faktor zeigt, was das Konto braucht: solange kein
 // Geheimnis eingerichtet ist, den Schlüssel zum Abtippen in die Authenticator-App
-// (der Server erzeugt ihn und legt ihn als Entwurf ab), danach nur das Feld für
-// den Code. POST nimmt den Code. Der Browser schickt nie ein Geheimnis: ein
-// Entwurf wird erst zum Geheimnis, wenn ein Code zu ihm stimmt. Ein angenommener
-// Code bestätigt die Session für 12 Stunden (core/zweiter-faktor.ts).
+// (der Server erzeugt ihn und legt ihn als Entwurf dieser Session ab), danach nur
+// das Feld für den Code. POST nimmt den Code. Der Browser schickt nie ein
+// Geheimnis: ein Entwurf wird erst zum Geheimnis, wenn ein Code der Session zu
+// ihrem Entwurf stimmt. Ruft eine andere Session des Kontos die Einrichtung auf,
+// bekommt sie einen eigenen neuen Schlüssel und der alte ist hinfällig; jede
+// Anlage und jedes Ersetzen steht mit Konto und IP im Log, nie der Schlüssel.
+// Ein angenommener Code bestätigt die Session für 12 Stunden (core/zweiter-faktor.ts).
 
 /** Fünf falsche Codes je Konto in 15 Minuten sperren die Eingabe bis zum Ende des Fensters. */
 const CODE_FEHLVERSUCHE_MAX = 5;
@@ -599,16 +602,29 @@ export function createSicherheitZweiterFaktorRouter(deps: ZweiterFaktorDeps): Ro
 
   const zugang = [kopf, nurWennKonfiguriert, deps.pageAuth, nurKonto];
 
-  /** Die Seite passend zum Stand des Kontos: mit Schlüssel, solange nichts eingerichtet ist (dann gibt es einen Entwurf), sonst nur die Codeeingabe. */
-  function ansicht(user: User, meldung?: string): string {
-    const entwurf = deps.store.entwurfBereitstellen(user.id, neuesTotpGeheimnis());
+  /** Das Token der Session dieser Anfrage; pageAuth hat es gelesen und die Session geprüft. */
+  const sitzungsToken = (req: Request): string => parseCookies(req)[SESSION_COOKIE];
+
+  /**
+   * Die Seite passend zum Stand des Kontos: mit Schlüssel, solange nichts
+   * eingerichtet ist (dann gibt es einen Entwurf dieser Session), sonst nur die
+   * Codeeingabe. Die Datenbank wird nur beschrieben, wenn dabei ein Entwurf
+   * entsteht; das steht im Log, mit Konto und IP und ohne den Schlüssel.
+   */
+  function ansicht(req: Request, user: User, meldung?: string): string {
+    const entwurf = deps.store.entwurfBereitstellen(user.id, sitzungsToken(req), neuesTotpGeheimnis());
+    if (entwurf?.ereignis === 'angelegt') {
+      console.log(`🛡️ Sicherheit: Entwurf angelegt für ${user.email} von ${req.ip || 'unbekannt'}`);
+    } else if (entwurf?.ereignis === 'ersetzt') {
+      console.warn(`⚠️ Sicherheit: Entwurf ersetzt für ${user.email} von ${req.ip || 'unbekannt'}`);
+    }
     return entwurf === null
       ? renderEingabe({ email: user.email, aktion: ZWEITER_FAKTOR_PFAD, meldung })
-      : renderEinrichten({ email: user.email, geheimnis: entwurf, aktion: ZWEITER_FAKTOR_PFAD, meldung });
+      : renderEinrichten({ email: user.email, geheimnis: entwurf.entwurf, aktion: ZWEITER_FAKTOR_PFAD, meldung });
   }
 
-  router.get(ZWEITER_FAKTOR_PFAD, ...zugang, (_req, res) => {
-    res.type('html').send(ansicht(getAuth(res)!.user!));
+  router.get(ZWEITER_FAKTOR_PFAD, ...zugang, (req, res) => {
+    res.type('html').send(ansicht(req, getAuth(res)!.user!));
   });
 
   // Der Körper wird erst gelesen, wenn Konto und Origin stimmen, und ist auf 2 KB begrenzt. Die
@@ -616,7 +632,16 @@ export function createSicherheitZweiterFaktorRouter(deps: ZweiterFaktorDeps): Ro
   router.post(ZWEITER_FAKTOR_PFAD, ...zugang, nurEigeneOrigin, express.urlencoded({ extended: false, limit: CODE_BODY_MAX }), (req, res) => {
     const user = getAuth(res)!.user!;
     const ip = req.ip || 'unbekannt';
-    const abweisen = (status: number, meldung: string) => res.status(status).type('html').send(ansicht(user, meldung));
+    const token = sitzungsToken(req);
+    const abweisen = (status: number, meldung: string) => res.status(status).type('html').send(ansicht(req, user, meldung));
+
+    // Wer schon bestätigt ist, hat hier nichts mehr zu tun (zweites Absenden, Doppelklick, Neuladen der
+    // Antwort): weiter, ohne etwas zu prüfen. Das ist kein Fehlversuch und darf keiner werden: ein
+    // schon verbrauchter Code würde sonst als falsch gezählt.
+    if (deps.store.istBestaetigt(token, jetzt())) {
+      res.redirect(303, NACH_BESTAETIGUNG);
+      return;
+    }
 
     // Gesperrt wird vor der Prüfung: auch der richtige Code geht dann nicht durch, sonst wäre die Sperre ein Orakel.
     if (fehlversuche.blocked(user.id)) {
@@ -638,16 +663,16 @@ export function createSicherheitZweiterFaktorRouter(deps: ZweiterFaktorDeps): Ro
     }
 
     // Geprüft wird gegen das, was der Server hat: das Geheimnis oder, solange keins eingerichtet ist,
-    // seinen Entwurf. Aus dem Formular kommt nur der Code.
-    const zustand = deps.store.zustand(user.id);
+    // den Entwurf dieser Session (der einer anderen zählt nicht). Aus dem Formular kommt nur der Code.
+    const zustand = deps.store.zustand(user.id, token);
     const einrichten = zustand.geheimnis === null;
     const geheimnis = zustand.geheimnis ?? zustand.entwurf;
     if (geheimnis === null) {
-      abweisen(400, 'Der Schlüssel wurde gerade erst erzeugt. Lege zuerst den Eintrag in der App an und gib dann den Code ein.');
+      // Die Seite legt dieser Session dabei einen neuen Schlüssel an und zeigt ihn.
+      abweisen(400, 'Zu dieser Anmeldung gab es noch keinen Schlüssel, oder ein anderer Aufruf hat ihn ersetzt. Unten steht ein neuer. Lege zuerst den Eintrag in der App an und gib dann den Code ein.');
       return;
     }
 
-    const token = parseCookies(req)[SESSION_COOKIE]; // pageAuth hat ihn gelesen und die Session geprüft
     const zeit = jetzt();
     const schritt = findeTotpSchritt(geheimnis, code, zeit.getTime());
     const angenommen = schritt !== null && (einrichten
